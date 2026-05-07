@@ -1,0 +1,39 @@
+# Build outputs
+build/
+.cxx/
+*.o
+*.so
+*.apk
+*.aab
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+
+# Compiled shaders (generated)
+shaders/compiled/
+android/app/src/main/assets/
+
+# Gradle
+.gradle/
+android/build/
+android/app/build/
+android/.gradle/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logcat_*.txt

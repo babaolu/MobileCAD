@@ -1,0 +1,16 @@
+#!/bin/sh
+# Gradle wrapper script
+
+DIRNAME=$(dirname "$0")
+APP_HOME=$(cd "$DIRNAME" && pwd)
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+
+JAVA_PATH=java
+if [ -n "$JAVA_HOME" ]; then
+    JAVA_PATH=$JAVA_HOME/bin/java
+fi
+
+exec "$JAVA_PATH" \
+    -Xmx64m -Xms64m \
+    -classpath "$CLASSPATH" \
+    org.gradle.wrapper.GradleWrapperMain "$@"
