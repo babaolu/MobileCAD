@@ -102,6 +102,7 @@ VulkanContext::~VulkanContext() {
     }
 
     if (m_instance != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
         vkDestroyInstance(m_instance, nullptr);
     }
 }
@@ -268,6 +269,9 @@ void VulkanContext::createLogicalDevice() {
     if (result != VK_SUCCESS) {
         throw std::runtime_error("Failed to create logical device");
     }
+
+    vkGetDeviceQueue(m_device, m_graphicsFamily, 0, &m_graphicsQueue);
+    m_presentQueue = m_graphicsQueue;
 }
 
 void VulkanContext::createCommandPool() {

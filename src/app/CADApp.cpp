@@ -395,7 +395,8 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = m_swapchain->getExtent();
 
-    VkClearValue clearColor = {0.1f, 0.1f, 0.1f, 1.0f};
+    VkClearValue clearColor{};
+    clearColor.color = {{0.1f, 0.1f, 0.1f, 1.0f}};
     renderPassInfo.clearValueCount = 1;
     renderPassInfo.pClearValues = &clearColor;
 
