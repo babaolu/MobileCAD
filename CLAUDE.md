@@ -13,7 +13,7 @@ MobileCAD is a native Android CAD application built with C++20 and Vulkan using 
 - **Graphics**: Vulkan 1.2+ (via vulkan.hpp C++ bindings)
 - **Windowing/Input**: Android NDK + NativeActivity + ANativeWindow
 - **Shader Language**: Slang (.slang → .spv, compiled on host)
-- **Build System**: CMake 3.20+ for native code, Gradle 8+ for APK packaging
+- **Build System**: CMake 3.20+ + Ninja for native code, `package_apk.sh` (custom) for APK packaging — no Gradle
 - **NDK**: r26+ with Clang toolchain, android_native_app_glue
 - **Language**: C++20
 - **Math**: Custom Vec3, Mat4 (glm-like but minimal)
@@ -82,42 +82,70 @@ This project is developed in an **Ubuntu environment running in PRoot** (via `pr
 
 ### Prerequisites
 
-- **Android NDK**: r26+ (includes Clang, Vulkan headers, android_native_app_glue)
-- **Android SDK**: Command-line tools, build-tools, platform-sdk-34
-- **Build**: Gradle 8+, CMake 3.20+, Ninja
-- **Host**: Any Linux/macOS system to compile shaders with `slangc`
-- **Shaders**: Slang compiler (`slangc`) or `glslangValidator` (compile on host, not device)
+- **Android NDK**: r26+ (includes Vulkan headers, android_native_app_glue)
+- **Android SDK**: Command-line tools, build-tools, platform-android-34 (for `android.jar`)
+- **Build**: CMake 3.20+, Ninja
+- **APK tooling**: `aapt2`, `zipalign`, `apksigner`, `keytool` — all installable via `apt` in PRoot Ubuntu
+- **Toolchain**: `~/AI/arm64-ndk/arm64-android.toolchain.cmake` (ARM64 hybrid toolchain, see below)
+- **Shaders**: `slangc` installed in PRoot Ubuntu (compiles `.slang` → `.spv` on-device)
+
+> **No Gradle required.** Gradle's NDK plugin invokes x86_64 host tools from the NDK, which cannot
+> run natively in this ARM64 PRoot environment. The custom toolchain and `package_apk.sh` replace
+> Gradle entirely, using the system's native ARM64 clang as the compiler and borrowing only the
+> NDK's sysroot, headers, and libraries.
 
 ### Quick Start
 
 ```bash
-# Build APK
-cd android
-./gradlew assembleDebug
+# 1. Compile shaders (run from project root, inside PRoot)
+./scripts/compile_shaders.sh
 
-# Install on device
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+# 2. Configure — point CMake at the ARM64 hybrid toolchain
+cmake -B build \
+  -DCMAKE_TOOLCHAIN_FILE=~/AI/arm64-ndk/arm64-android.toolchain.cmake \
+  -G Ninja
 
-# Launch (or tap the app icon)
+# 3. Build the shared library
+ninja -C build
+
+# 4. Package into an APK (no Gradle)
+~/AI/arm64-ndk/package_apk.sh \
+  --so build/libmobilecad.so \
+  --manifest AndroidManifest.xml \
+  --assets assets/ \
+  --out mobilecad-debug.apk
+
+# 5. Install on device (from Termux, outside PRoot)
+adb install -r mobilecad-debug.apk
+
+# 6. Launch
 adb shell am start -n com.mobilecad.app/android.app.NativeActivity
 
-# View logs
+# 7. View logs
 adb logcat MobileCAD:* *:S
 ```
 
+> **Why not Gradle?** The official NDK r26 ships x86_64 host tools (`clang`, `lld`, etc.) that
+> cannot execute natively in this ARM64 PRoot environment. Instead, the build uses a hybrid
+> approach: the system's native ARM64 clang as the compiler/linker, and the NDK purely for its
+> sysroot, headers, and `android_native_app_glue`. `package_apk.sh` replicates what Gradle's
+> NDK plugin does (resource linking, `.so` bundling, alignment, signing) using native ARM64 tools.
+
 ### Shader Compilation
 
-Shaders are compiled on the **host** (your build machine) at CMake build time, then bundled into the APK as assets:
+Shaders are compiled **on-device inside PRoot** using `slangc` (native ARM64), then passed to
+`package_apk.sh` as the `--assets` directory to be bundled into the APK:
 
 ```bash
-# Manual shader compilation (host)
+# Compile all .slang shaders to .spv (run from project root inside PRoot)
 ./scripts/compile_shaders.sh
 
-# Check compiled shaders exist in the APK
-ls android/app/src/main/assets/shaders/*.spv
+# Compiled .spv files land in assets/shaders/
+ls assets/shaders/*.spv
 ```
 
-Shaders are auto-copied to `android/app/src/main/assets/shaders/` during the Gradle build.
+`package_apk.sh` bundles the entire `assets/` directory into the APK automatically when
+`--assets assets/` is passed. There is no Gradle post-build copy step.
 
 ### Linting & Formatting
 
@@ -133,8 +161,15 @@ clang-format --dry-run --Werror src/**/*.cpp src/**/*.h
 
 ### Debugging
 
-- **Debug build**: Gradle debug variant includes:
-  - NDK debug symbols
+- **Debug build**: Compile with debug flags by passing `-DCMAKE_BUILD_TYPE=Debug` to CMake:
+  ```bash
+  cmake -B build \
+    -DCMAKE_TOOLCHAIN_FILE=~/AI/arm64-ndk/arm64-android.toolchain.cmake \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -G Ninja
+  ```
+  Debug builds include:
+  - NDK debug symbols (`-g`)
   - Vulkan validation layers (if installed on device)
   - Debug Utils extension with callback (warnings/errors to logcat)
   - `assert()` checks enabled
@@ -223,11 +258,18 @@ clang-format --dry-run --Werror src/**/*.cpp src/**/*.h
 ### Running the Application
 
 ```bash
-# Build and install
-cd android && ./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+# Build and package (inside PRoot)
+./scripts/compile_shaders.sh
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=~/AI/arm64-ndk/arm64-android.toolchain.cmake -G Ninja
+ninja -C build
+~/AI/arm64-ndk/package_apk.sh \
+  --so build/libmobilecad.so \
+  --manifest AndroidManifest.xml \
+  --assets assets/ \
+  --out mobilecad-debug.apk
 
-# Launch
+# Install and launch (from Termux, outside PRoot)
+adb install -r mobilecad-debug.apk
 adb shell am start -n com.mobilecad.app/android.app.NativeActivity
 
 # Monitor logs
@@ -247,7 +289,7 @@ After installation, confirm:
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
 | App crashes on launch | Vulkan not supported on device or shaders missing | Check device Vulkan version, ensure assets present |
-| Black screen | Shaders not bundled | Run `./gradlew assembleDebug` again, check `assets/shaders/` |
+| Black screen | Shaders not bundled | Re-run `compile_shaders.sh`, check `assets/shaders/*.spv` exist, re-run `package_apk.sh` |
 | "Failed to create Android surface" | `ANativeWindow` invalid | Check NativeActivity lifecycle, ensure `APP_CMD_INIT_WINDOW` received |
 | Validation errors | Vulkan validation layer issues | Check logcat, fix VUID violations |
 
@@ -272,17 +314,36 @@ After installation, confirm:
 ## Build Commands Reference
 
 ```bash
-# Build debug APK
-cd android && ./gradlew assembleDebug
+# Compile shaders (inside PRoot)
+./scripts/compile_shaders.sh
 
-# Build release APK
-cd android && ./gradlew assembleRelease
+# Configure — debug build
+cmake -B build \
+  -DCMAKE_TOOLCHAIN_FILE=~/AI/arm64-ndk/arm64-android.toolchain.cmake \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -G Ninja
+
+# Configure — release build
+cmake -B build \
+  -DCMAKE_TOOLCHAIN_FILE=~/AI/arm64-ndk/arm64-android.toolchain.cmake \
+  -DCMAKE_BUILD_TYPE=Release \
+  -G Ninja
+
+# Build shared library
+ninja -C build
 
 # Clean build
-cd android && ./gradlew clean
+rm -rf build/
 
-# Install APK
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+# Package APK
+~/AI/arm64-ndk/package_apk.sh \
+  --so build/libmobilecad.so \
+  --manifest AndroidManifest.xml \
+  --assets assets/ \
+  --out mobilecad-debug.apk
+
+# Install APK (from Termux, outside PRoot)
+adb install -r mobilecad-debug.apk
 
 # View logs
 adb logcat MobileCAD:* *:S
@@ -293,28 +354,28 @@ adb uninstall com.mobilecad.app
 
 ### CMake Details
 
-Root `CMakeLists.txt`:
-- Handles shader compilation (runs at configure time on host)
-- Finds Vulkan on the build machine
+`CMakeLists.txt` (project root):
+- Always invoked with `-DCMAKE_TOOLCHAIN_FILE=~/AI/arm64-ndk/arm64-android.toolchain.cmake`
+- The toolchain sets the compiler to `/usr/bin/clang++` (native ARM64), the sysroot to the NDK
+  `linux-x86_64/sysroot`, and injects `--target=aarch64-linux-android34` into all flags
+- Builds `libmobilecad.so` as a shared library (loaded by NativeActivity at runtime)
+- Links: `android_native_app_glue`, `android`, `log`, `vulkan`, `c++`, `c++abi`
 
-`android/app/CMakeLists.txt`:
-- Configures NDK toolchain
-- Builds `mobilecad.so` shared library
-- Links: `android`, `log`, `android_native_app_glue`, `Vulkan::Vulkan`
-- Copies shaders to APK assets
+Build types (passed via `-DCMAKE_BUILD_TYPE=`):
+- **Debug**: `-g`, debug symbols, asserts enabled
+- **Release**: `-O3 -DNDEBUG`, no debug overhead
 
-Build types via Gradle:
-- **debug**: NDK debug symbols, sanitizers possible
-- **release**: full optimizations, no debug overhead
-
-Shader compilation: Integrated via `add_custom_command`/`add_custom_target`. Compiles `.slang` → `.spv` on host. Shaders copied to APK assets directory by Gradle post-build step.
+Shader compilation: `scripts/compile_shaders.sh` runs `slangc` (native ARM64 in PRoot) to compile
+`.slang` → `.spv`. Output goes to `assets/shaders/`. `package_apk.sh` then bundles the entire
+`assets/` directory into the APK. Shaders are **not** compiled at CMake configure time.
 
 ### Dependencies & Version Requirements
 
 - **Android NDK**: r26+
-- **Android SDK**: minSdk 34 (Android 14), targetSdk 34
-- **Vulkan**: 1.2+ on device
-- **Gradle**: 8+
+- **Android SDK**: minSdk 34 (Android 14), targetSdk 34, `android.jar` from `platforms/android-34`
+- **Vulkan**: 1.4 on device (Turnip/Adreno 740 confirmed)
 - **CMake**: 3.20+
 - **Ninja**: any recent version
-- **Slang**: latest from source (compiled on host for APK)
+- **Slang**: installed in PRoot Ubuntu via `apt` or built from source (`slangc` on PATH)
+- **APK tools**: `aapt2`, `zipalign`, `apksigner`, `keytool` (all via `apt` in PRoot Ubuntu)
+- **Toolchain**: `~/AI/arm64-ndk/arm64-android.toolchain.cmake` + `~/AI/arm64-ndk/package_apk.sh`

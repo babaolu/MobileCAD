@@ -37,3 +37,6 @@ Thumbs.db
 # Logs
 *.log
 logcat_*.txt
+
+# APK signature artifacts
+*.idsig

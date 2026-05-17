@@ -31,9 +31,21 @@ echo ""
 echo "Compiling Slang shaders to SPIR-V..."
 for slang in "$SHADER_SRC_DIR"/*.slang; do
     if [ -f "$slang" ]; then
-        base=$(basename "$slang" .slang)
-        echo "  Compiling $slang..."
-        slangc "$slang" -target spirv -entry main -o "$OUTPUT_DIR/$base.spv"
+        filename=$(basename "$slang")
+        base="${filename%.slang}"
+        # Determine shader stage from filename prefix (e.g., simple.vert.slang -> vertex)
+        if [[ "$filename" == *.vert.slang ]]; then
+            stage="vertex"
+        elif [[ "$filename" == *.frag.slang ]]; then
+            stage="fragment"
+        elif [[ "$filename" == *.comp.slang ]]; then
+            stage="compute"
+        else
+            echo "  WARNING: Unknown shader stage for $filename, skipping"
+            continue
+        fi
+        echo "  Compiling $filename (stage: $stage)..."
+        slangc "$slang" -target spirv -entry main -stage "$stage" -o "$OUTPUT_DIR/$base.spv"
         echo "    -> $OUTPUT_DIR/$base.spv"
     fi
 done
@@ -41,4 +53,3 @@ done
 echo ""
 echo "Shader compilation complete. Output in: $OUTPUT_DIR"
 echo ""
-

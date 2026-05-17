@@ -36,18 +36,40 @@ constexpr bool ENABLE_VALIDATION_LAYERS = true;
 } // namespace
 
 VulkanContext::VulkanContext(ANativeWindow* window) {
+    LOGI("VulkanContext::VulkanContext entering");
     m_width = static_cast<uint32_t>(ANativeWindow_getWidth(window));
     m_height = static_cast<uint32_t>(ANativeWindow_getHeight(window));
+    LOGI("Window size: %ux%u", m_width, m_height);
+
+    LOGI("Creating Vulkan instance");
     createInstance();
+    LOGI("Instance created");
+
+    LOGI("Creating Android surface");
     createSurface(window);
+    LOGI("Surface created");
+
+    LOGI("Picking physical device");
     pickPhysicalDevice();
+    LOGI("Physical device selected: %p", (void*)m_physicalDevice);
+
+    LOGI("Creating logical device");
     createLogicalDevice();
+    LOGI("Logical device created");
+
+    LOGI("Creating command pool");
     createCommandPool();
+    LOGI("Command pool created");
+
+    LOGI("Creating sync objects and command buffers");
     createSyncObjects();
+    LOGI("Sync objects created");
+
     if constexpr (ENABLE_VALIDATION_LAYERS) {
-        /* Debug messenger needs Vulkan debug utils extension, not on all Android */
+        LOGI("Setting up debug messenger");
         setupDebugMessenger();
     }
+    LOGI("VulkanContext initialization complete");
 }
 
 VulkanContext::~VulkanContext() {

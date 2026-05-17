@@ -27,17 +27,38 @@ CADApp::~CADApp() {
 }
 
 void CADApp::init(ANativeWindow* window) {
-    LOGI("CADApp::init: creating VulkanContext");
-    m_vkContext = std::make_unique<rendering::VulkanContext>(window);
+    LOGI("CADApp::init: starting");
+    try {
+        LOGI("Creating VulkanContext");
+        m_vkContext = std::make_unique<rendering::VulkanContext>(window);
+        LOGI("VulkanContext created");
 
-    initSwapchain();
-    initRenderPass();
-    initPipelineLayout();
-    initGraphicsPipeline();
-    initFramebuffers();
+        LOGI("Initializing swapchain");
+        initSwapchain();
+        LOGI("Swapchain initialized");
 
-    m_initialized = true;
-    LOGI("CADApp::init: done");
+        LOGI("Initializing render pass");
+        initRenderPass();
+        LOGI("Render pass initialized");
+
+        LOGI("Initializing pipeline layout");
+        initPipelineLayout();
+        LOGI("Pipeline layout initialized");
+
+        LOGI("Initializing graphics pipeline (shader loading & pipeline creation)");
+        initGraphicsPipeline();
+        LOGI("Graphics pipeline initialized");
+
+        LOGI("Initializing framebuffers");
+        initFramebuffers();
+        LOGI("Framebuffers initialized");
+
+        m_initialized = true;
+        LOGI("CADApp::init: done");
+    } catch (const std::exception& e) {
+        LOGE("CADApp::init failed: %s", e.what());
+        throw;
+    }
 }
 
 void CADApp::initSwapchain() {

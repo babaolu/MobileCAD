@@ -20,6 +20,8 @@ add_library(mobilecad SHARED ${SOURCES})
 
 target_include_directories(mobilecad PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    # Vulkan video extension headers are in third_party, not in sysroot
+    ${NDK_ROOT}/sources/third_party/vulkan/src/include
 )
 
 # NDK libraries: android, log, android_native_app_glue, vulkan
