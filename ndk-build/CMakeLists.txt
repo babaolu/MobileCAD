@@ -86,7 +86,7 @@ target_compile_options(mobilecad PRIVATE
 target_link_libraries(mobilecad PRIVATE
     ${android-lib}
     ${log-lib}
-    android_native_app_glue
+    "-Wl,--whole-archive" android_native_app_glue "-Wl,--no-whole-archive"
     Vulkan::Vulkan
 )
 
