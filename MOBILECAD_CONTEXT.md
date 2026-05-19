@@ -27,44 +27,29 @@
 
 7. **APK packaging** — `package_apk.sh` had `aapt2` compatibility issues (old `-M` flag, missing resources). **Fix:** Manual packaging: `aapt2 link` (manifest + assets) → `zip` native `.so` files → `zipalign` → `apksigner`. Manifest uses hardcoded strings, no resource references.
 
-### Launch Crash Bugs — Runtime Fixes
-
-After confirming the build succeeded and an APK could launch, 7 additional crash-class bugs were identified and fixed (see commit `d0b2da9`):
-
-| # | File | Bug | Fix |
-|---|------|-----|-----|
-| **1** | `src/main.cpp` | `g_assetManager` never set — `Pipeline::loadShader()` fell back to filesystem path `shaders/simple.vert.spv`, which doesn't exist on Android (working directory is `/`). This threw `std::runtime_error` inside `CADApp::init` before any frame was drawn. | Call `rendering::Pipeline::setAssetManager(app->activity->assetManager)` in `APP_CMD_INIT_WINDOW` **before** constructing `CADApp`. |
-| **2** | `src/main.cpp` | CADApp was never constructed — `main.cpp` was a logging/event-stub stub. `new CADApp(window)` now happens in `APP_CMD_INIT_WINDOW`; `drawFrame()` called each loop iteration when initialized; `APP_CMD_TERM_WINDOW` and exit-path cleanup wired. | Rewrote `main.cpp` to construct CADApp, call `drawFrame()`, and manage lifecycle. |
-| **3** | `src/rendering/Swapchain.cpp:80` | `compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR` — most Android surface types do **not** support the OPAQUE flag. `vkCreateSwapchainKHR` returned a failure result. | Changed to `VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR`. |
-| **4** | `src/rendering/VulkanContext.cpp:273` | `createLogicalDevice()` created the `VkDevice` but never called `vkGetDeviceQueue()`. Both `m_graphicsQueue` and `m_presentQueue` remained `VK_NULL_HANDLE`. `vkQueueSubmit(handle=VK_NULL_HANDLE)` caused a crash. | Added `vkGetDeviceQueue(m_device, m_graphicsFamily, 0, &m_graphicsQueue)` and set `m_presentQueue = m_graphicsQueue` after `vkCreateDevice`. |
-| **5** | `src/app/CADApp.cpp:398` | `VkClearValue clearColor = {0.1f, 0.1f, 0.1f, 1.0f}` — `VkClearValue` is a union; this aggregate init zero-initialises the struct then writes only `color.float32[0]`, leaving the rest as zero (technically UB in C++). | Changed to `VkClearValue clearColor{}; clearColor.color = {{0.1f, 0.1f, 0.1f, 1.0f}};`. |
-| **6** | `src/rendering/VulkanContext.cpp:104` | `m_surface` was never destroyed in `~VulkanContext()`. The surface was leaked every time. | Added `vkDestroySurfaceKHR(m_instance, m_surface, nullptr)` **before** `vkDestroyInstance`. |
-| **7** | `src/main.cpp` | `<android/log.h>` was inadvertently omitted from the rewritten `main.cpp`, causing compile errors for `ANDROID_LOG_INFO` / `ANDROID_LOG_ERROR` macros. | Added `#include <android/log.h>`. |
-
-### Files Modified (session)
+### Files Modified
 
 | File | Key Changes |
 |------|------------|
-| `ndk-build/CMakeLists.txt` | vk_video header copy, Vulkan find_package, android_native_app_glue, link opts for compiler-rt/libunwind, resource-dir, -L paths |
-| `src/main.cpp` | CADApp construction/destruction, `Pipeline::setAssetManager`, `drawFrame()` in render loop, `APP_CMD_WINDOW_RESIZED` + `APP_CMD_TERM_WINDOW` handling |
-| `src/rendering/VulkanContext.cpp` | `vkGetDeviceQueue()` after `vkCreateDevice()`, `vkDestroySurfaceKHR()` in destructor |
-| `src/rendering/Swapchain.cpp` | `VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR` |
-| `src/app/CADApp.cpp` | `VkClearValue` explicit union member assignment |
+| `ndk-build/CMakeLists.txt` | vk_video header copy, Vulkan find, android_native_app_glue, link opts for compiler-rt/libunwind, resource-dir, -L paths |
+| `src/main.cpp` | extern "C" on android_main, ALooper_pollOnce event loop, file logging to `/data/local/tmp/mobilecad.log`, `wait_retry` pattern waiting for window, inline lambda callbacks, try/catch |
+| `android/app/CMakeLists.txt` | Added NDK third_party Vulkan include (unused in final build) |
+| `staging/AndroidManifest.xml` | Created minimal manifest: `package=com.mobilecad`, hardcoded label, `android:hasCode="false"`, `android:extractNativeLibs="true"`, `android:debuggable="true"` |
+| `BUILD_FIXES.md` | Comprehensive documentation of all fixes and build instructions |
 
 ---
 
 ## Current State
 
-### Build succeeds
+### Build succeeds ✅
 ```bash
-cmake -S ndk-build -B build \
-  -DCMAKE_TOOLCHAIN_FILE=~/AI/arm64-ndk/arm64-android.toolchain.cmake \
-  -G Ninja
-ninja -C build        # → build/libmobilecad.so (~443 KB)
+./scripts/compile_shaders.sh
+cmake -S ndk-build -B build -DCMAKE_TOOLCHAIN_FILE=~/AI/arm64-ndk/arm64-android.toolchain.cmake -G Ninja
+ninja -C build        # → build/libmobilecad.so (509KB)
 ```
 
-### APK built, signed, delivered
-- **APK:** `mobilecad-aligned.apk` (~611 KB, signed with debug keystore)
+### APK built and signed ✅
+- **APK:** `mobilecad-aligned.apk` (~605 KB, signed with debug keystore)
 - **Location:** `~/storage/shared/Download/mobilecad-aligned.apk`
 - **Contains:**
   - `AndroidManifest.xml` (binary, compiled by aapt2)
@@ -72,7 +57,73 @@ ninja -C build        # → build/libmobilecad.so (~443 KB)
   - `lib/arm64-v8a/libmobilecad.so`
   - `lib/arm64-v8a/libc++_shared.so`
 - **Manifest:** `package=com.mobilecad`, `android.app.lib_name=mobilecad`, Vulkan required, `minSdkVersion=34`, debuggable
-- **Status:** All 7 previously-catastrophic bugs fixed. App should now reach `drawFrame()` and render the colored triangle. **Pending on-device verification.**
+
+### Problem: App immediately closes on launch ❓
+
+**Symptoms:**
+- No `MobileCAD` logcat tag appears at all
+- No `mobilecad.log` file created anywhere on the filesystem
+- `android_main` confirmed NOT being entered (no log output)
+- App closes instantly after tapping the icon
+
+**Tested log file paths (all writable without permissions):**
+- `/data/local/tmp/mobilecad.log`
+- `/sdcard/mobilecad.log`
+- `/sdcard/Download/mobilecad.log`
+- `/sdcard/Android/data/com.mobilecad/files/mobilecad.log`
+
+### Hypotheses for Why `android_main` Is Never Called
+
+1. **Library loads but `android_main` symbol name is wrong** — checked: `readelf` shows `android_main` as `GLOBAL DEFAULT`, correct name. The stub in `libandroid_native_app_glue.a` should find it.
+
+2. **`libmobilecad.so` fails `dlopen` before reaching `android_main`** — e.g., missing transitive dependency, or a `.init_array` / `__attribute__((constructor))` function crashes before `android_main`. Current code has **no** global objects or constructors beyond a static `AutoInitialized` (removed in latest build). The `g_logFile` static FILE* is zero-initialized.
+
+3. **ClassLoader/zygote process kills the native process before our code runs** — can happen if the library has a bad ELF header or unmet symbol dependency.
+
+4. **NativeActivity cannot find the library at the expected path** — the `android:hasCode="false"` + `android.app.lib_name=mobilecad` combo requires the `.so` to be at `lib/arm64-v8a/libmobilecad.so` inside the APK, which it is. But if `android:extractNativeLibs` is ignored or the extract path is wrong, load fails.
+
+5. **Insufficient native heap or linker bug** on this specific Android 14 build.
+
+### What to Try Next (in order)
+
+**A. Confirm the library is actually being loaded:**
+The most important-remaining diagnostic is to check whether `libmobilecad.so` is loaded at all when
+the app launches, and if `dlopen` returns an error. This must be verified directly via
+`logcat` or by checking the native library directory under the app's data dir. I cannot
+access the device yet so I cannot verify directly from here, but the next step is:
+Check `/data/data/com.mobilecad/files/` and `/data/data/com.mobilecad/lib/` after
+installing and attempting to launch.
+
+**B. Read logcat via ADB from Termux:**
+The crash log needs to be observed live on device. In Termux setup the previous session I could not yet
+connect with adb. Repeating the instruction from the conversation that must be performed on the
+device itself in Termux out of PRoot:
+
+Termux outside of proot-distro:
+```
+adb connect localhost:5555
+adb logcat *:* MobileCAD:* -v threadtime
+```
+
+Then open the app. If nothing useful appears in logcat at all, the process is being killed in Java
+before any native code runs. If a Kernel/tombstone/signal is referenced, find the PID via logcat
+and inspect `/data/tombstones/tombstone_XX` via `adb pull` or by opening the file directly on
+device. Even with `android:debuggable=true`, process death due to a `SIGSEGV` in a constructor
+before `android_main` will never reach file-logging calls.
+
+**C. Verify APK contents:**
+Confirm the just-installed APK has both `.so` files intact at those exact paths with `adb shell`:
+```
+run-as com.mobilecad ls -la /data/app/~/base.apk!lib/arm64-v8a/
+```
+or extract with `unzip -l`.
+
+**D. Add `-Wl,--no-undefined` linker flag** to ensure no undefined symbols slip through.
+
+**E. Try `-fsyntax-only` to confirm no constructor elision issues** before linking.
+
+**F. Check for `android:extractNativeLibs` having any effect** on this Android 14 build by checking
+`/data/app/~~base.apk!/lib/arm64-v8a/` after install.
 
 ---
 
@@ -93,32 +144,24 @@ cmake -S ndk-build -B build \
 ninja -C build
 
 # 4. Package APK
-SDK=/data/data/com.termux/files/home/android-sdk
-rm -rf staging && mkdir -p staging/lib/arm64-v8a staging/assets/shaders
-
+rm -rf staging && mkdir -p staging/lib/arm64-v8a
+cp -r /data/data/com.termux/files/home/android-sdk/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so staging/lib/arm64-v8a/
 cp build/libmobilecad.so staging/lib/arm64-v8a/
-cp "$SDK/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" staging/lib/arm64-v8a/
-cp shaders/compiled/simple.frag.spv staging/assets/shaders/
-cp shaders/compiled/simple.vert.spv staging/assets/shaders/
-
+cp -r assets staging/
 cat > staging/AndroidManifest.xml <<'EOF'
-[use the manifest from staging/AndroidManifest.xml in the repo]
+[manifest contents — see above]
 EOF
 
-mkdir -p /tmp/aapt2_work
-aapt2 link -o /tmp/aapt2_work/base.apk \
-  --manifest staging/AndroidManifest.xml \
-  -A staging/assets \
-  -I "$SDK/platforms/android-34/android.jar"
-
-cd staging && zip -ur ../build/mobilecad-base.apk lib/arm64-v8a/ && cd ..
+aapt2 link -I /data/data/com.termux/files/home/android-sdk/platforms/android-34/android.jar \
+  --manifest staging/AndroidManifest.xml -A staging/assets -o mobilecad-base.apk
+cd staging && zip -ur ../mobilecad-base.apk lib/arm64-v8a/ && cd ..
 zipalign -v 4 mobilecad-base.apk mobilecad-aligned.apk
 apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
   --ks-key-alias androiddebugkey mobilecad-aligned.apk
 apksigner verify mobilecad-aligned.apk
 
-# Copy to shared storage
-cp mobilecad-aligned.apk ~/storage/shared/Download/`
+# Copy to shared storage for file-manager install
+cp mobilecad-aligned.apk ~/storage/shared/Download/
 ```
 
 ---
@@ -128,24 +171,31 @@ cp mobilecad-aligned.apk ~/storage/shared/Download/`
 | Path | Purpose |
 |------|---------|
 | `ndk-build/CMakeLists.txt` | Primary CMake entry (vk_video copy, find_package, link opts) |
-| `src/main.cpp` | NDK entry point — CADApp lifecycle, asset manager, render loop |
-| `src/app/CADApp.cpp` / `.h` | CADApp (Vulkan init, drawFrame, cleanup, resize) |
-| `src/rendering/VulkanContext.cpp` / `.h` | VulkanContext (instance, device, surface, queues, command pool, sync) |
+| `src/main.cpp` | NDK entry point, event loop, logging |
+| `src/app/CADApp.cpp` / `.h` | CADApp (Vulkan init, drawFrame, cleanup) |
+| `src/rendering/VulkanContext.cpp` / `.h` | VulkanContext (instance, device, surface, queues) |
 | `src/rendering/Swapchain.cpp` / `.h` | Swapchain creation and management |
-| `src/rendering/Pipeline.cpp` / `.h` | Shader loading (AAssetManager fallback to filesystem), shader module creation |
+| `src/rendering/Pipeline.cpp` / `.h` | Shader loading (AAssetManager) and module creation |
+| `external/slang/build/_deps/vulkan_headers-src/` | Complete vk_video headers (source of truth) |
 | `assets/shaders/` | SPIR-V shaders (`simple.vert.spv`, `simple.frag.spv`) |
-| `BUILD_FIXES.md` | Detailed documentation of build fixes |
-| `MOBILECAD_CONTEXT.md` | This file — full session history |
+| `BUILD_FIXES.md` | Detailed documentation of all build fixes |
 
 ---
 
 ## Known Unknowns / Open Questions
 
-- None remaining. All identified crash-class bugs are fixed. The app is expected to render a coloured triangle on launch. **Verify on device.**
+- Why is `android_main` never entered? No log file at all, no logcat output under `MobileCAD` tag.
+- Is `libmobilecad.so` even loading? Need to verify via `logcat` or `run-as`/`pm path`.
+- Any tombstone in `/data/tombstones/` after crash?
+- Is `android:extractNativeLibs="true"` effective on this Android 14 build?
 
 ## What the Next Session Should Do
 
-1. `adb install ~/storage/shared/Download/mobilecad-aligned.apk` (from Termux, outside PRoot)
-2. `adb logcat MobileCAD:* *:S` and confirm `android_main ENTERED` → `CADApp created: initialized=1` → frames rendering
-3. If anything fails, inspect `adb logcat -b crash` and `/data/tombstones/`
-4. After triangle starts working, begin CAD geometry MVP: vertex buffers uploaded with `vkCreateBuffer` / `vkMapMemory`, transform uniforms via push constants, and a basic camera matrix.
+1. Re-examine this file (`MOBILECAD_CONTEXT.md`) to understand full history.
+2. Try running `adb logcat` live while launching the app (from Termux outside proot, using `adb connect localhost:5555`).
+3. If logcat shows nothing for MobileCAD, inspect `logcat -b crash` and `/data/tombstones/`.
+4. If a tombstone exists, share the tombstone file contents.
+5. Consider removing `android:hasCode="false"` if that affects the NativeActivity classloader behavior.
+6. Consider verifying NDK sysroot's `libc.so`, `libm.so`, `libdl.so` are available in APK environment.
+7. Consider adding a trivial `JNI_OnLoad` that logs via `__android_log_print` immediately on load as an additional test.
+8. If still stuck, try `linkerconfig` or verify APK's `classes.dex` (NativeActivity class) isn't the issue.

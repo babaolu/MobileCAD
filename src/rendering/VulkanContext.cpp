@@ -101,8 +101,11 @@ VulkanContext::~VulkanContext() {
         }
     }
 
-    if (m_instance != VK_NULL_HANDLE) {
+    if (m_surface != VK_NULL_HANDLE && m_instance != VK_NULL_HANDLE) {
         vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+    }
+
+    if (m_instance != VK_NULL_HANDLE) {
         vkDestroyInstance(m_instance, nullptr);
     }
 }
@@ -270,6 +273,7 @@ void VulkanContext::createLogicalDevice() {
         throw std::runtime_error("Failed to create logical device");
     }
 
+    // Fetch queue handles — graphics and present share the same family on Android
     vkGetDeviceQueue(m_device, m_graphicsFamily, 0, &m_graphicsQueue);
     m_presentQueue = m_graphicsQueue;
 }
