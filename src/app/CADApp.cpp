@@ -261,7 +261,19 @@ void CADApp::initFramebuffers() {
         framebufferInfo.height = m_swapchain->getExtent().height;
         framebufferInfo.layers = 1;
 
-        auto device = m_vkContext->getDevice();
+    // Guard against drawFrame() running while onWindowResized() is mid-rebuild
+    if (m_pendingResize)
+    {
+        LOGI("drawFrame: skipping — resize in progress");
+        return;
+    }
+    if (!m_vkContext || !m_swapchain || !m_pipeline)
+    {
+        LOGE("drawFrame: null resource — vkContext=%p swapchain=%p pipeline=%p",
+             (void*)m_vkContext.get(), (void*)m_swapchain.get(), (void*)m_pipeline);
+        return;
+    }
+    auto device = m_vkContext->getDevice();
         if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &m_swapchainFramebuffers[i]) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create framebuffer");
         }
@@ -295,15 +307,29 @@ void CADApp::cleanup() {
 void CADApp::onWindowResized(ANativeWindow* window, int32_t width, int32_t height) {
     if (width <= 0 || height <= 0) return;
 
-    m_vkContext.reset();
-    cleanupSwapchain();
+    m_pendingResize = true;
+    try
+    {
+        m_vkContext.reset();
+        cleanupSwapchain();
 
-    m_vkContext = std::make_unique<rendering::VulkanContext>(window);
-    initSwapchain();
-    initFramebuffers();
+        m_vkContext = std::make_unique<rendering::VulkanContext>(window);
+        initSwapchain();
+        initFramebuffers();
+    }
+    catch (const std::exception& e)
+    {
+        LOGE("onWindowResized failed: %s", e.what());
+        m_vkContext.reset();
+        m_swapchain.reset();
+    }
+    m_pendingResize = false;
 }
 
 void CADApp::drawFrame() {
+    m_drawFrameCount++;
+    LOGI("drawFrame #%u  (vkCtx=%p swap=%p pipe=%p)", m_drawFrameCount,
+         (void*)m_vkContext.get(), (void*)m_swapchain.get(), (void*)m_pipeline);
     auto device = m_vkContext->getDevice();
     uint32_t frame = m_currentFrame % m_vkContext->getMaxFrames();
 

@@ -35,6 +35,7 @@ public:
 
 private:
     bool m_initialized{false};
+    bool m_pendingResize{false};
 
     std::unique_ptr<rendering::VulkanContext> m_vkContext;
     std::unique_ptr<rendering::Swapchain> m_swapchain;
@@ -47,6 +48,7 @@ private:
 
     // Sync per-frame
     uint32_t m_currentFrame{0};
+    uint32_t m_drawFrameCount{0};
 
     // Initialization
     void initSwapchain();
