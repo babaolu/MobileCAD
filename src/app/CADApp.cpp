@@ -310,16 +310,23 @@ void CADApp::onWindowResized(ANativeWindow* window, int32_t width, int32_t heigh
     m_pendingResize = true;
     try
     {
-        m_vkContext.reset();
-        cleanupSwapchain();
+        m_swapchain.reset();
+    }
+    catch (...) {}
+    m_vkContext.reset();
+    m_swapchain.reset();
 
+    try
+    {
+        LOGI("onWindowResized: rebuilding VulkanContext (%dx%d)", width, height);
         m_vkContext = std::make_unique<rendering::VulkanContext>(window);
         initSwapchain();
         initFramebuffers();
+        LOGI("onWindowResized: rebuild complete");
     }
     catch (const std::exception& e)
     {
-        LOGE("onWindowResized failed: %s", e.what());
+        LOGE("onWindowResized FAILED: %s", e.what());
         m_vkContext.reset();
         m_swapchain.reset();
     }
