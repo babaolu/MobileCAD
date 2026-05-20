@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MobileCAD is a native Android CAD application built with C++20 and Vulkan using Android NativeActivity. No X11, no GLFW — the app runs directly on Android via `ANativeWindow` and the NDK's `android_native_app_glue` library. Shaders are written in Slang and compiled to SPIR-V at build time on the host.
 
-**Current State**: The project has a foundational Vulkan rendering pipeline working with a simple colored triangle demo. Core infrastructure includes Vulkan context management with NDK surface creation, swapchain handling, and graphics pipeline setup. The codebase follows modern C++ practices with RAII and C++ Core Guidelines.
+**Current State**: The project's core Vulkan rendering pipeline works — `android_main` is entered, VulkanContext initializes (instance → surface → physical device → logical device → command pool → sync objects → swapchain → render pass → pipeline → framebuffers), and `drawFrame()` runs each frame. CADApp.cpp was corrupted by an edit-drift bug that spliced `drawFrame()`'s body inside `initFramebuffers()`; it was restored from git. Two launch-kill bugs were fixed: `hasCode="false"` on the manifest (requires `classes.dex` + `hasCode=true`), and `onWindowResized()` cleanup ordering. The colored-triangle background-building demo is verified-running through logcat; screen output not yet confirmed on device.
 
 ## Tech Stack
 
@@ -119,7 +119,7 @@ ninja -C build
 adb install -r mobilecad-debug.apk
 
 # 6. Launch
-adb shell am start -n com.mobilecad.app/android.app.NativeActivity
+adb shell "am start -n com.mobilecad/android.app.NativeActivity"
 
 # 7. View logs
 adb logcat MobileCAD:* *:S
@@ -133,8 +133,7 @@ adb logcat MobileCAD:* *:S
 
 ### Shader Compilation
 
-Shaders are compiled **on-device inside PRoot** using `slangc` (native ARM64), then passed to
-`package_apk.sh` as the `--assets` directory to be bundled into the APK:
+Shaders are compiled **on-device inside PRoot** using `slangc` (native ARM64), then copied to `assets/shaders/` before APK packaging:
 
 ```bash
 # Compile all .slang shaders to .spv (run from project root inside PRoot)
@@ -144,8 +143,12 @@ Shaders are compiled **on-device inside PRoot** using `slangc` (native ARM64), t
 ls assets/shaders/*.spv
 ```
 
-`package_apk.sh` bundles the entire `assets/` directory into the APK automatically when
-`--assets assets/` is passed. There is no Gradle post-build copy step.
+### APK Packaging
+
+The build uses a manual `staging/`-based packaging pipeline. `classes.dex` must also be generated from stub Java classes (see `MOBILECAD_CONTEXT.md` for the exact one-liner). See `BUILD_FIXES.md` §7 and §10 for the complete sequence.
+
+> **No Gradle required.**
+
 
 ### Linting & Formatting
 
@@ -258,19 +261,23 @@ clang-format --dry-run --Werror src/**/*.cpp src/**/*.h
 ### Running the Application
 
 ```bash
-# Build and package (inside PRoot)
+# 1. Compile shaders (run from project root, inside PRoot)
 ./scripts/compile_shaders.sh
+
+# 2. Build .so and package APK (inside PRoot)
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=~/AI/arm64-ndk/arm64-android.toolchain.cmake -G Ninja
 ninja -C build
+
+# 3. One-line DEX + full packaging (see MOBILECAD_CONTEXT.md for details)
 ~/AI/arm64-ndk/package_apk.sh \
   --so build/libmobilecad.so \
-  --manifest AndroidManifest.xml \
+  --manifest staging/AndroidManifest.xml \
   --assets assets/ \
   --out mobilecad-debug.apk
 
 # Install and launch (from Termux, outside PRoot)
 adb install -r mobilecad-debug.apk
-adb shell am start -n com.mobilecad.app/android.app.NativeActivity
+adb shell "am start -n com.mobilecad/android.app.NativeActivity"
 
 # Monitor logs
 adb logcat MobileCAD:* *:S
@@ -338,7 +345,7 @@ rm -rf build/
 # Package APK
 ~/AI/arm64-ndk/package_apk.sh \
   --so build/libmobilecad.so \
-  --manifest AndroidManifest.xml \
+  --manifest staging/AndroidManifest.xml \
   --assets assets/ \
   --out mobilecad-debug.apk
 
@@ -349,7 +356,7 @@ adb install -r mobilecad-debug.apk
 adb logcat MobileCAD:* *:S
 
 # Uninstall
-adb uninstall com.mobilecad.app
+adb uninstall com.mobilecad
 ```
 
 ### CMake Details

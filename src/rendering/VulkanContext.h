@@ -50,8 +50,11 @@ private:
     uint32_t m_height{0};
     uint32_t m_graphicsFamily{UINT32_MAX};
 
-    // Ring buffer for frame sync (NDK doesn't have triple buffering like GLFW)
-    static constexpr uint32_t kMaxFrames = 8;
+    // Ring buffer for frame sync. NDK NativeActivity has no vsync-aware GLFW-style swapchain.
+    // Larger depth increases submission pipelining; some Adreno drivers (vulkan.adreno.so)
+    // are known to crash on vkQueueSubmit when the submission queue exceeds 4 deep.
+    // Use 2 to stay safely under that threshold.
+    static constexpr uint32_t kMaxFrames = 2;
     std::vector<VkCommandBuffer> m_cmdBuffers;
     VkSemaphore m_waitSemaphores[kMaxFrames];
     VkSemaphore m_signalSemaphores[kMaxFrames];

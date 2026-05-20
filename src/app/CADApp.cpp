@@ -132,9 +132,6 @@ void CADApp::initPipelineLayout() {
 void CADApp::initGraphicsPipeline() {
     auto device = m_vkContext->getDevice();
 
-    // Load shaders from assets/shaders/
-    // APK assets are accessible via AAssetManager, but for NativeActivity
-    // the simplest path is to use relative paths from the working directory
     auto vertShaderCode = rendering::Pipeline::loadShader("shaders/simple.vert.spv");
     auto fragShaderCode = rendering::Pipeline::loadShader("shaders/simple.frag.spv");
 
@@ -155,7 +152,6 @@ void CADApp::initGraphicsPipeline() {
 
     VkPipelineShaderStageCreateInfo stages[] = {vertStageInfo, fragStageInfo};
 
-    // Vertex input
     auto bindingDescriptions = Vertex::getBindingDescriptions();
     auto attributeDescriptions = Vertex::getAttributeDescriptions();
 
@@ -166,13 +162,11 @@ void CADApp::initGraphicsPipeline() {
     vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
-    // Input assembly
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     inputAssembly.primitiveRestartEnable = VK_FALSE;
 
-    // Viewport
     VkViewport viewport{};
     viewport.x = 0.0f;
     viewport.y = 0.0f;
@@ -192,7 +186,6 @@ void CADApp::initGraphicsPipeline() {
     viewportState.scissorCount = 1;
     viewportState.pScissors = &scissor;
 
-    // Rasterizer
     VkPipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.depthClampEnable = VK_FALSE;
@@ -203,13 +196,11 @@ void CADApp::initGraphicsPipeline() {
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.depthBiasEnable = VK_FALSE;
 
-    // Multisampling
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    // Color blending
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -221,7 +212,6 @@ void CADApp::initGraphicsPipeline() {
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
-    // Pipeline
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipelineInfo.stageCount = 2;
@@ -261,19 +251,7 @@ void CADApp::initFramebuffers() {
         framebufferInfo.height = m_swapchain->getExtent().height;
         framebufferInfo.layers = 1;
 
-    // Guard against drawFrame() running while onWindowResized() is mid-rebuild
-    if (m_pendingResize)
-    {
-        LOGI("drawFrame: skipping — resize in progress");
-        return;
-    }
-    if (!m_vkContext || !m_swapchain || !m_pipeline)
-    {
-        LOGE("drawFrame: null resource — vkContext=%p swapchain=%p pipeline=%p",
-             (void*)m_vkContext.get(), (void*)m_swapchain.get(), (void*)m_pipeline);
-        return;
-    }
-    auto device = m_vkContext->getDevice();
+        auto device = m_vkContext->getDevice();
         if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &m_swapchainFramebuffers[i]) != VK_SUCCESS) {
             throw std::runtime_error("Failed to create framebuffer");
         }
@@ -292,6 +270,14 @@ void CADApp::cleanupSwapchain() {
 void CADApp::cleanup() {
     if (!m_initialized) return;
 
+    // If device was lost, all Vulkan handles are invalid — attempting vkDestroy* on them
+    // can crash inside the driver (see tombstone crash chain in BUILD_FIXES.md §17).
+    // Skip all cleanup; OS reclaims the address space on process exit.
+    if (m_deviceLost) {
+        LOGE("cleanup: device lost — skipping vkDestroy calls");
+        return;
+    }
+
     auto device = m_vkContext->getDevice();
 
     vkDestroyPipeline(device, m_pipeline, nullptr);
@@ -305,49 +291,77 @@ void CADApp::cleanup() {
 }
 
 void CADApp::onWindowResized(ANativeWindow* window, int32_t width, int32_t height) {
-    if (width <= 0 || height <= 0) return;
+    LOGE("onWindowResized ENTRY %dx%d vkCtx=%p swap=%p", width, height,
+         (void*)m_vkContext.get(), (void*)m_swapchain.get());
+    if (width <= 0 || height <= 0) { LOGE("onWindowResized SKIP width<=0"); return; }
 
-    m_pendingResize = true;
-    try
-    {
-        m_swapchain.reset();
-    }
-    catch (...) {}
-    m_vkContext.reset();
+    // Step 1: destroy framebuffers (device still valid)
+    LOGE("onWindowResized step-1: cleanupSwapchain()");
+    cleanupSwapchain();
+
+    // Step 2: destroy swapchain *before* context, so ~Swapchain() can still reach device
+    LOGE("onWindowResized step-2: destroying old swapchain");
     m_swapchain.reset();
 
+    // Step 3: destroy VulkanContext last (frees device, instance, …)
+    LOGE("onWindowResized step-3: resetting VulkanContext");
+    m_vkContext.reset();
+
+    // Step 4: rebuild everything
+    LOGE("onWindowResized step-4: creating new VulkanContext");
     try
     {
-        LOGI("onWindowResized: rebuilding VulkanContext (%dx%d)", width, height);
         m_vkContext = std::make_unique<rendering::VulkanContext>(window);
+        LOGE("onWindowResized step-5: VulkanContext OK");
+
+        LOGE("onWindowResized step-6: initSwapchain");
         initSwapchain();
+        LOGE("onWindowResized step-7: initFramebuffers");
         initFramebuffers();
-        LOGI("onWindowResized: rebuild complete");
+        LOGI("onWindowResized: rebuild complete  swap=%dx%d",
+             getSwapchainExtentW(), getSwapchainExtentH());
     }
     catch (const std::exception& e)
     {
-        LOGE("onWindowResized FAILED: %s", e.what());
-        m_vkContext.reset();
+        LOGE("onWindowResized EXCEPTION: %s", e.what());
+        // Clear every PDP (power delivery) resource that may still hold handles
+        // onto the old device before m_vkContext is invalidated.
+        m_pipeline = VK_NULL_HANDLE;
+        m_pipelineLayout = VK_NULL_HANDLE;
+        m_renderPass = VK_NULL_HANDLE;
+        m_swapchainFramebuffers.clear();
         m_swapchain.reset();
+        m_vkContext.reset();
     }
-    m_pendingResize = false;
+    LOGE("onWindowResized RETURN");
 }
 
-void CADApp::drawFrame() {
-    m_drawFrameCount++;
-    LOGI("drawFrame #%u  (vkCtx=%p swap=%p pipe=%p)", m_drawFrameCount,
+bool CADApp::drawFrame() {
+    LOGE("drawFrame ENTER vkCtx=%p swap=%p pipe=%p",
          (void*)m_vkContext.get(), (void*)m_swapchain.get(), (void*)m_pipeline);
+    if (!m_vkContext || !m_swapchain || !m_pipeline || !m_pipelineLayout || !m_renderPass)
+    {
+        LOGE("FATAL: drawFrame #%u — null resource (vkCtx=%p swap=%p pipe=%p layout=%p rp=%p)",
+             m_drawFrameCount + 1,
+             (void*)m_vkContext.get(), (void*)m_swapchain.get(), (void*)m_pipeline,
+             (void*)m_pipelineLayout, (void*)m_renderPass);
+        return false;
+    }
+    LOGE("drawFrame step-1: getting device");
     auto device = m_vkContext->getDevice();
     uint32_t frame = m_currentFrame % m_vkContext->getMaxFrames();
 
+    LOGE("drawFrame step-2: waiting fence");
     VkFence fence = m_vkContext->getFence(frame);
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
     vkResetFences(device, 1, &fence);
 
+    LOGE("drawFrame step-3: getting semaphores/cmd buffer");
     VkSemaphore waitSem = m_vkContext->getWaitSemaphore(frame);
     VkSemaphore signalSem = m_vkContext->getSignalSemaphore(frame);
     VkCommandBuffer cmdBuf = m_vkContext->getCmdBuffer(frame);
 
+    LOGE("drawFrame step-4: vkAcquireNextImageKHR");
     uint32_t imageIndex;
     auto result = vkAcquireNextImageKHR(
         device,
@@ -357,22 +371,32 @@ void CADApp::drawFrame() {
         VK_NULL_HANDLE,
         &imageIndex
     );
+    LOGE("drawFrame step-5: acquire result=%d imageIndex=%u", result, imageIndex);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         LOGI("swapchain out of date, recreating");
         cleanupSwapchain();
         initSwapchain();
         initFramebuffers();
-        return;
+        return true;   // swapchain recreated; caller will continue on next frame
     } else if (result != VK_SUCCESS) {
-        throw std::runtime_error("Failed to acquire swapchain image");
+        LOGE("vkAcquireNextImageKHR failed: %d", result);
+        m_deviceLost = true;
+        return false;
     }
 
-    // Reset and record command buffer
+    LOGE("drawFrame step-6: recording cmd buffer image=%u", imageIndex);
     vkResetCommandBuffer(cmdBuf, 0);
     recordCommandBuffer(cmdBuf, imageIndex);
 
-    // Submit
+    LOGE("drawFrame step-7: submitting queue  frame=%u  queue=%p cmd=%p semWait=%p semSig=%p fence=%p",
+         m_currentFrame,
+         (void*)m_vkContext->getGraphicsQueue(),
+         (void*)cmdBuf,
+         (void*)waitSem,
+         (void*)signalSem,
+         (void*)fence);
+
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
@@ -385,33 +409,81 @@ void CADApp::drawFrame() {
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = &signalSem;
 
-    if (vkQueueSubmit(m_vkContext->getGraphicsQueue(), 1, &submitInfo, fence) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to submit draw command buffer");
+    // Direct values — avoid wide format-string truncation in logcat
+    LOGE("DBG-Q vkQ=%p cmd=%p swEx=%u",
+         (void*)m_vkContext->getGraphicsQueue(),
+         (void*)cmdBuf,
+         m_swapchain ? m_swapchain->getExtent().width : 0);
+    LOGE("DBG-Q semW=%p semS=%p fen=%p  frame=%u",
+         (void*)waitSem, (void*)signalSem, (void*)fence,
+         m_currentFrame);
+
+    // Catch every exception inside drawFrame.  Throwing past the SIGSEGV-masked
+    // region in main.cpp causes the Adreno driver crash to be silently lost:
+    //   vkQueueSubmit faults → SIGSEGV blocked → throw starts unwinding →
+    //   handleCmd catch fires → sigprocmask restores unblocked mask →
+    //   pending SIGSEGV fires inside sigaction → sigabort → ABORT_DUMP at
+    //   address 0x90 → android_main EXITING never reached.
+    // local catch prevents the throw from crossing the block/unblock boundary.
+    try {
+        VkResult submitResult = vkQueueSubmit(m_vkContext->getGraphicsQueue(), 1, &submitInfo, fence);
+        if (submitResult == VK_ERROR_DEVICE_LOST) {
+            LOGE("drawFrame step7: vkQueueSubmit VK_ERROR_DEVICE_LOST — GPU was lost, exiting");
+            m_deviceLost = true;
+            return false;
+        }
+        LOGE("drawFrame step7: vkQueueSubmit result=%d fence=%p", submitResult, (void*)fence);
+        if (submitResult != VK_SUCCESS) {
+            LOGE("FATAL: vkQueueSubmit FAILED (result=%d)", submitResult);
+            m_deviceLost = true;
+            return false;
+        }
+
+        VkPresentInfoKHR presentInfo{};
+        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = &signalSem;
+        VkSwapchainKHR swapchains[] = {m_swapchain->getSwapchain()};
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = swapchains;
+        presentInfo.pImageIndices = &imageIndex;
+
+        LOGE("drawFrame step-8: vkQueuePresentKHR");
+        result = vkQueuePresentKHR(m_vkContext->getPresentQueue(), &presentInfo);
+        LOGE("drawFrame step-9: present result=%d", result);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+            LOGE("drawFrame step-9: swapchain out of date — recreating (image=%u)", imageIndex);
+            cleanupSwapchain();
+            initSwapchain();
+            initFramebuffers();
+            return true;   // caller continues to next drawFrame
+        } else if (result != VK_SUCCESS) {
+            LOGE("vkQueuePresentKHR failed: %d", result);
+            m_deviceLost = true;
+            return false;
+        }
     }
-
-    // Present
-    VkPresentInfoKHR presentInfo{};
-    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-    presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = &signalSem;
-    VkSwapchainKHR swapchains[] = {m_swapchain->getSwapchain()};
-    presentInfo.swapchainCount = 1;
-    presentInfo.pSwapchains = swapchains;
-    presentInfo.pImageIndices = &imageIndex;
-
-    result = vkQueuePresentKHR(m_vkContext->getPresentQueue(), &presentInfo);
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-        cleanupSwapchain();
-        initSwapchain();
-        initFramebuffers();
-    } else if (result != VK_SUCCESS) {
-        throw std::runtime_error("Failed to present swapchain image");
+    catch (const std::exception& e) {
+        LOGE("EXCEPTION in drawFrame: %s", e.what());
+        return false;
+    }
+    catch (...) {
+        LOGE("UNKNOWN EXCEPTION in drawFrame");
+        return false;
     }
 
     m_currentFrame = (m_currentFrame + 1) % m_vkContext->getMaxFrames();
+    return true;
 }
 
 void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+    if (!m_renderPass || !m_swapchainFramebuffers[imageIndex] || !m_swapchain || !m_pipeline || !m_pipelineLayout) {
+        LOGE("recordCommandBuffer: null resource — rp=%p fb=%p swap=%p pipe=%p layout=%p",
+             (void*)m_renderPass,   (void*)m_swapchainFramebuffers[imageIndex],
+             (void*)m_swapchain.get(), (void*)m_pipeline, (void*)m_pipelineLayout);
+        throw std::runtime_error("recordCommandBuffer: null pipeline resource");
+    }
+
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = 0;

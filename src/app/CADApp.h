@@ -27,15 +27,22 @@ public:
 
     // NDK lifecycle integration
     void init(ANativeWindow* window);
-    void drawFrame();
+    bool drawFrame();   // returns false on device-loss → caller should exit
     void cleanup();
     void onWindowResized(ANativeWindow* window, int32_t width, int32_t height);
 
     bool isInitialized() const { return m_initialized; }
+    bool isDeviceLost() const { return m_deviceLost; }
 
-private:
+    // Diagnostic / main.cpp accessors (const, no side effects)
+    rendering::VulkanContext* getVkContextPtr() const { return m_vkContext.get(); }
+    rendering::Swapchain*     getSwapchainPtr()  const { return m_swapchain.get(); }
+    uint32_t getSwapchainExtentW() const { return m_swapchain ? m_swapchain->getExtent().width : 0; }
+    uint32_t getSwapchainExtentH() const { return m_swapchain ? m_swapchain->getExtent().height : 0; }
+
+  private:
     bool m_initialized{false};
-    bool m_pendingResize{false};
+    bool m_deviceLost{false};
 
     std::unique_ptr<rendering::VulkanContext> m_vkContext;
     std::unique_ptr<rendering::Swapchain> m_swapchain;
