@@ -45,7 +45,7 @@ for slang in "$SHADER_SRC_DIR"/*.slang; do
             continue
         fi
         echo "  Compiling $filename (stage: $stage)..."
-        slangc "$slang" -target spirv -entry main -stage "$stage" -o "$OUTPUT_DIR/$base.spv"
+        slangc "$slang" -target spirv -profile glsl_450+SPIRV_1_3 -entry main -stage "$stage" -o "$OUTPUT_DIR/$base.spv"
         echo "    -> $OUTPUT_DIR/$base.spv"
     fi
 done

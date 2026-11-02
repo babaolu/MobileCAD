@@ -81,14 +81,14 @@ struct Mat4 {
         return result;
     }
 
-    // Perspective projection
+    // Perspective projection (Vulkan clip space: +Y down, depth [0, 1])
     static Mat4 perspective(T fovyRad, T aspect, T zNear, T zFar) noexcept {
         Mat4 result{};
         T tanHalfFovy = std::tan(fovyRad / T(2));
         result(0, 0) = T(1) / (aspect * tanHalfFovy);
-        result(1, 1) = T(1) / tanHalfFovy;
-        result(2, 2) = -(zFar + zNear) / (zFar - zNear);
-        result(2, 3) = -(T(2) * zFar * zNear) / (zFar - zNear);
+        result(1, 1) = -T(1) / tanHalfFovy; // Vulkan +Y is down
+        result(2, 2) = zFar / (zNear - zFar); // Vulkan [0, 1] depth
+        result(2, 3) = (zFar * zNear) / (zNear - zFar);
         result(3, 2) = T(-1);
         result(3, 3) = T(0);
         return result;
@@ -101,18 +101,9 @@ struct Mat4 {
         Vec3<T> u = s.cross(f);
 
         Mat4 result = identity();
-        result(0, 0) = s.x;
-        result(1, 0) = s.y;
-        result(2, 0) = s.z;
-        result(0, 1) = u.x;
-        result(1, 1) = u.y;
-        result(2, 1) = u.z;
-        result(0, 2) = -f.x;
-        result(1, 2) = -f.y;
-        result(2, 2) = -f.z;
-        result(0, 3) = -s.dot(eye);
-        result(1, 3) = -u.dot(eye);
-        result(2, 3) = f.dot(eye);
+        result(0, 0) = s.x;  result(0, 1) = s.y;  result(0, 2) = s.z;  result(0, 3) = -s.dot(eye);
+        result(1, 0) = u.x;  result(1, 1) = u.y;  result(1, 2) = u.z;  result(1, 3) = -u.dot(eye);
+        result(2, 0) = -f.x; result(2, 1) = -f.y; result(2, 2) = -f.z; result(2, 3) = f.dot(eye);
         return result;
     }
 
