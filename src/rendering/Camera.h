@@ -42,6 +42,33 @@ public:
         m_distance = std::clamp(m_distance, 0.5f, 100.0f);
     }
 
+    void setViewIso() noexcept {
+        m_target = utils::math::Vec3f(0.0f, 0.5f, 0.0f);
+        m_yaw = 0.785398f;   // 45 deg
+        m_pitch = 0.523599f; // 30 deg
+        m_distance = 4.0f;
+    }
+
+    void setViewTop() noexcept {
+        m_yaw = 0.0f;
+        m_pitch = 1.48f;
+    }
+
+    void setViewFront() noexcept {
+        m_yaw = 0.0f;
+        m_pitch = 0.0f;
+    }
+
+    void setViewRight() noexcept {
+        m_yaw = 1.570796f;
+        m_pitch = 0.0f;
+    }
+
+    void resetView() noexcept {
+        setViewIso();
+    }
+
+
     void pan(float deltaX, float deltaY, float viewportHeight) noexcept {
         if (viewportHeight <= 0.0f) return;
 

@@ -26,7 +26,14 @@ echo "Project Root: ${ROOT_DIR}"
 echo "Android JAR:  ${ANDROID_JAR}"
 echo "Android NDK:  ${ANDROID_NDK_HOME}"
 
+# Ensure external/imgui exists
+if [ ! -d "${ROOT_DIR}/external/imgui" ]; then
+    echo "--- Cloning Dear ImGui into external/imgui ---"
+    git clone --depth 1 -b docking https://github.com/ocornut/imgui.git "${ROOT_DIR}/external/imgui"
+fi
+
 # 2. Compile Shaders
+
 echo "--- Compiling shaders ---"
 if "${SCRIPT_DIR}/compile_shaders.sh"; then
     echo "--- Shaders compiled successfully ---"

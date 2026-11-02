@@ -25,7 +25,9 @@ public:
     VkQueue getPresentQueue() const { return m_presentQueue; }
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
+    uint32_t getGraphicsQueueFamily() const { return m_graphicsFamily; }
     void setDimensions(uint32_t w, uint32_t h) { m_width = w; m_height = h; }
+
 
     // Sync objects (ring buffer for multiple frames in flight)
     VkCommandBuffer getCmdBuffer(uint32_t index) const;

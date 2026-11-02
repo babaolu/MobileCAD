@@ -7,6 +7,9 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "imgui.h"
+#include "imgui_impl_android.h"
+#include "imgui_impl_vulkan.h"
 #include "utils/math/Mat4.h"
 
 #define LOG_TAG "MobileCAD"
@@ -63,6 +66,10 @@ void CADApp::init(ANativeWindow* window)
         LOGI("Initializing scene geometry (grid, XYZ triad, solid block)");
         initSceneGeometry();
         LOGI("Scene geometry initialized");
+
+        LOGI("Initializing Dear ImGui");
+        initImGui(window);
+        LOGI("Dear ImGui initialized");
 
         m_initialized = true;
         LOGI("CADApp::init: done");
@@ -260,7 +267,7 @@ void CADApp::initGraphicsPipeline()
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     depthStencil.depthTestEnable = VK_TRUE;
     depthStencil.depthWriteEnable = VK_TRUE;
-    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
@@ -417,89 +424,187 @@ void CADApp::initSceneGeometry()
 
     m_gridMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, gridVertices);
 
-    // 2. 3D Solid CAD Part (m_solidMesh, Indexed TRIANGLE_LIST)
-    // 24-vertex / 36-index unit block sitting on Y=0 ground plane [0, 1.5]
-    std::vector<Vertex> solidVertices;
-    std::vector<uint32_t> solidIndices;
+    // 2. 3D Solid CAD Part & Wireframe feature lines
+    setPrimitive(PrimitiveType::Box);
+}
 
-    auto addQuad = [&](const float p0[3], const float p1[3], const float p2[3], const float p3[3],
-                       const float n[3], const float c[3])
+void CADApp::setPrimitive(PrimitiveType type)
+{
+    m_currentPrimitive = type;
+    auto device = m_vkContext->getDevice();
+    auto physDevice = m_vkContext->getPhysicalDevice();
+
+    vkDeviceWaitIdle(device);
+
+    geometry::Primitives::MeshData data;
+    switch (type)
     {
-        uint32_t baseIdx = static_cast<uint32_t>(solidVertices.size());
-        solidVertices.push_back({{p0[0], p0[1], p0[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
-        solidVertices.push_back({{p1[0], p1[1], p1[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
-        solidVertices.push_back({{p2[0], p2[1], p2[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
-        solidVertices.push_back({{p3[0], p3[1], p3[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
+    case PrimitiveType::Box:
+        data = geometry::Primitives::createBox(1.5f, 1.5f, 1.5f);
+        break;
+    case PrimitiveType::Cylinder:
+        data = geometry::Primitives::createCylinder(0.6f, 1.2f, 32);
+        break;
+    case PrimitiveType::Sphere:
+        data = geometry::Primitives::createSphere(0.6f, 24, 32);
+        break;
+    }
 
-        solidIndices.push_back(baseIdx + 0);
-        solidIndices.push_back(baseIdx + 1);
-        solidIndices.push_back(baseIdx + 2);
-        solidIndices.push_back(baseIdx + 0);
-        solidIndices.push_back(baseIdx + 2);
-        solidIndices.push_back(baseIdx + 3);
-    };
-
-    const float x0 = 0.75f;
-    const float y0 = 0.0f;
-    const float y1 = 1.5f;
-    const float z0 = 0.75f;
-
-    // +Z Face (Front) - Anodized CAD Blue
-    const float pZ_0[3] = {-x0, y0, z0};
-    const float pZ_1[3] = {x0, y0, z0};
-    const float pZ_2[3] = {x0, y1, z0};
-    const float pZ_3[3] = {-x0, y1, z0};
-    const float nZ[3] = {0.0f, 0.0f, 1.0f};
-    const float cZ[3] = {0.35f, 0.65f, 0.95f};
-    addQuad(pZ_0, pZ_1, pZ_2, pZ_3, nZ, cZ);
-
-    // -Z Face (Back) - Bronze / Copper
-    const float nZb_0[3] = {x0, y0, -z0};
-    const float nZb_1[3] = {-x0, y0, -z0};
-    const float nZb_2[3] = {-x0, y1, -z0};
-    const float nZb_3[3] = {x0, y1, -z0};
-    const float nZb[3] = {0.0f, 0.0f, -1.0f};
-    const float cZb[3] = {0.85f, 0.60f, 0.30f};
-    addQuad(nZb_0, nZb_1, nZb_2, nZb_3, nZb, cZb);
-
-    // +Y Face (Top) - Polished Brass / Gold
-    const float pY_0[3] = {-x0, y1, z0};
-    const float pY_1[3] = {x0, y1, z0};
-    const float pY_2[3] = {x0, y1, -z0};
-    const float pY_3[3] = {-x0, y1, -z0};
-    const float nY[3] = {0.0f, 1.0f, 0.0f};
-    const float cY[3] = {0.92f, 0.76f, 0.35f};
-    addQuad(pY_0, pY_1, pY_2, pY_3, nY, cY);
-
-    // -Y Face (Bottom) - Cast Iron
-    const float nY_0[3] = {-x0, y0, -z0};
-    const float nY_1[3] = {x0, y0, -z0};
-    const float nY_2[3] = {x0, y0, z0};
-    const float nY_3[3] = {-x0, y0, z0};
-    const float nYb[3] = {0.0f, -1.0f, 0.0f};
-    const float cYb[3] = {0.50f, 0.52f, 0.58f};
-    addQuad(nY_0, nY_1, nY_2, nY_3, nYb, cYb);
-
-    // +X Face (Right) - CAD Aluminum / Silver
-    const float pX_0[3] = {x0, y0, z0};
-    const float pX_1[3] = {x0, y0, -z0};
-    const float pX_2[3] = {x0, y1, -z0};
-    const float pX_3[3] = {x0, y1, z0};
-    const float nX[3] = {1.0f, 0.0f, 0.0f};
-    const float cX[3] = {0.82f, 0.85f, 0.90f};
-    addQuad(pX_0, pX_1, pX_2, pX_3, nX, cX);
-
-    // -X Face (Left) - Slate Steel
-    const float nX_0[3] = {-x0, y0, -z0};
-    const float nX_1[3] = {-x0, y0, z0};
-    const float nX_2[3] = {-x0, y1, z0};
-    const float nX_3[3] = {-x0, y1, -z0};
-    const float nXb[3] = {-1.0f, 0.0f, 0.0f};
-    const float cXb[3] = {0.75f, 0.78f, 0.85f};
-    addQuad(nX_0, nX_1, nX_2, nX_3, nXb, cXb);
+    auto wireLines = geometry::Primitives::createWireframeLines(data.first, data.second);
 
     m_solidMesh =
-        std::make_unique<rendering::MeshBuffer>(device, physDevice, solidVertices, solidIndices);
+        std::make_unique<rendering::MeshBuffer>(device, physDevice, data.first, data.second);
+    m_wireframeMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, wireLines);
+}
+
+void CADApp::initImGui(ANativeWindow* window)
+{
+    auto device = m_vkContext->getDevice();
+
+    VkDescriptorPoolSize poolSizes[] = {{VK_DESCRIPTOR_TYPE_SAMPLER, 16},
+                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16},
+                                        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16},
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 16},
+                                        {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 16},
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 16},
+                                        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16},
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16},
+                                        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 16},
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 16},
+                                        {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 16}};
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets = 16 * sizeof(poolSizes) / sizeof(poolSizes[0]);
+    poolInfo.poolSizeCount = static_cast<uint32_t>(sizeof(poolSizes) / sizeof(poolSizes[0]));
+    poolInfo.pPoolSizes = poolSizes;
+
+    if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_imguiDescriptorPool) != VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to create ImGui descriptor pool");
+    }
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.IniFilename = nullptr;  // Disable ini storage on Android
+
+    ImGui::StyleColorsDark();
+
+    // High-DPI mobile touch scaling
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.ScaleAllSizes(2.6f);
+    io.FontGlobalScale = 2.6f;
+
+    ImGui_ImplAndroid_Init(window);
+
+    ImGui_ImplVulkan_InitInfo initInfo{};
+    initInfo.ApiVersion = VK_API_VERSION_1_3;
+    initInfo.Instance = m_vkContext->getInstance();
+    initInfo.PhysicalDevice = m_vkContext->getPhysicalDevice();
+    initInfo.Device = m_vkContext->getDevice();
+    initInfo.QueueFamily = m_vkContext->getGraphicsQueueFamily();
+    initInfo.Queue = m_vkContext->getGraphicsQueue();
+    initInfo.DescriptorPool = m_imguiDescriptorPool;
+    initInfo.MinImageCount = m_swapchain->getImageCount();
+    initInfo.ImageCount = m_swapchain->getImageCount();
+    initInfo.PipelineInfoMain.RenderPass = m_renderPass;
+    initInfo.PipelineInfoMain.Subpass = 0;
+    initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+    if (!ImGui_ImplVulkan_Init(&initInfo))
+    {
+        throw std::runtime_error("Failed to initialize ImGui Vulkan backend");
+    }
+}
+
+void CADApp::renderImGui()
+{
+    ImGui::SetNextWindowPos(ImVec2(30.0f, 30.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    if (ImGui::Begin("MobileCAD Studio", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        // Performance & Stats
+        float fps = ImGui::GetIO().Framerate;
+        uint32_t vertCount = 0;
+        uint32_t triCount = 0;
+        if (m_solidMesh && m_showSolid)
+        {
+            vertCount += m_solidMesh->getVertexCount();
+            triCount += m_solidMesh->hasIndices() ? (m_solidMesh->getIndexCount() / 3)
+                                                  : (m_solidMesh->getVertexCount() / 3);
+        }
+        if (m_gridMesh && m_showGrid)
+        {
+            vertCount += m_gridMesh->getVertexCount();
+        }
+        if (m_wireframeMesh && m_showWireframe)
+        {
+            vertCount += m_wireframeMesh->getVertexCount();
+        }
+
+        ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "Vulkan 1.4 Native CAD");
+        ImGui::Text("FPS: %.1f (%.2f ms/frame)", fps, 1000.0f / (fps > 0.0f ? fps : 60.0f));
+        ImGui::Text("Vertices: %u | Triangles: %u", vertCount, triCount);
+        ImGui::Separator();
+
+        // View Presets
+        ImGui::Text("Camera Presets:");
+        if (ImGui::Button("Iso"))
+        {
+            m_camera.setViewIso();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Top"))
+        {
+            m_camera.setViewTop();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Front"))
+        {
+            m_camera.setViewFront();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Right"))
+        {
+            m_camera.setViewRight();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reset"))
+        {
+            m_camera.resetView();
+        }
+        ImGui::Separator();
+
+        // Parametric Primitives
+        ImGui::Text("Parametric Primitive:");
+        if (ImGui::RadioButton("Box", m_currentPrimitive == PrimitiveType::Box))
+        {
+            setPrimitive(PrimitiveType::Box);
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Cylinder", m_currentPrimitive == PrimitiveType::Cylinder))
+        {
+            setPrimitive(PrimitiveType::Cylinder);
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Sphere", m_currentPrimitive == PrimitiveType::Sphere))
+        {
+            setPrimitive(PrimitiveType::Sphere);
+        }
+        ImGui::Separator();
+
+        // Display Toggles
+        ImGui::Text("Display Layers:");
+        ImGui::Checkbox("Grid & Triad", &m_showGrid);
+        ImGui::SameLine();
+        ImGui::Checkbox("Solid", &m_showSolid);
+        ImGui::SameLine();
+        ImGui::Checkbox("Wireframe", &m_showWireframe);
+    }
+    ImGui::End();
 }
 
 void CADApp::cleanupSwapchain()
@@ -533,6 +638,10 @@ void CADApp::cleanup()
         vkDeviceWaitIdle(device);
     }
 
+    if (m_wireframeMesh)
+    {
+        m_wireframeMesh.reset();
+    }
     if (m_solidMesh)
     {
         m_solidMesh.reset();
@@ -540,6 +649,14 @@ void CADApp::cleanup()
     if (m_gridMesh)
     {
         m_gridMesh.reset();
+    }
+    if (m_imguiDescriptorPool != VK_NULL_HANDLE)
+    {
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplAndroid_Shutdown();
+        ImGui::DestroyContext();
+        vkDestroyDescriptorPool(device, m_imguiDescriptorPool, nullptr);
+        m_imguiDescriptorPool = VK_NULL_HANDLE;
     }
     if (m_linePipeline != VK_NULL_HANDLE)
     {
@@ -706,6 +823,14 @@ bool CADApp::drawFrame()
         return false;
     }
 
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplAndroid_NewFrame();
+    ImGui::NewFrame();
+
+    renderImGui();
+
+    ImGui::Render();
+
     vkResetCommandBuffer(cmdBuf, 0);
     recordCommandBuffer(cmdBuf, imageIndex);
 
@@ -837,7 +962,7 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
     utils::math::Mat4f mvp = m_camera.getViewProjectionMatrix(aspect);
 
     // 1. Draw CAD Reference Grid and XYZ Origin Triad (LINE_LIST)
-    if (m_gridMesh && m_gridMesh->getVertexCount() > 0)
+    if (m_showGrid && m_gridMesh && m_gridMesh->getVertexCount() > 0)
     {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_linePipeline);
         VkBuffer vertexBuffers[] = {m_gridMesh->getVertexBuffer()};
@@ -849,7 +974,7 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
     }
 
     // 2. Draw 3D Solid CAD Part (TRIANGLE_LIST)
-    if (m_solidMesh && m_solidMesh->getVertexCount() > 0)
+    if (m_showSolid && m_solidMesh && m_solidMesh->getVertexCount() > 0)
     {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
         VkBuffer vertexBuffers[] = {m_solidMesh->getVertexBuffer()};
@@ -870,6 +995,25 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
                                sizeof(utils::math::Mat4f), &mvp);
             vkCmdDraw(commandBuffer, m_solidMesh->getVertexCount(), 1, 0, 0);
         }
+    }
+
+    // 3. Draw Wireframe Feature Lines (LINE_LIST)
+    if (m_showWireframe && m_wireframeMesh && m_wireframeMesh->getVertexCount() > 0)
+    {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_linePipeline);
+        VkBuffer vertexBuffers[] = {m_wireframeMesh->getVertexBuffer()};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                           sizeof(utils::math::Mat4f), &mvp);
+        vkCmdDraw(commandBuffer, m_wireframeMesh->getVertexCount(), 1, 0, 0);
+    }
+
+    // 4. Render Dear ImGui Viewport Overlay
+    ImDrawData* drawData = ImGui::GetDrawData();
+    if (drawData)
+    {
+        ImGui_ImplVulkan_RenderDrawData(drawData, commandBuffer);
     }
 
     vkCmdEndRenderPass(commandBuffer);

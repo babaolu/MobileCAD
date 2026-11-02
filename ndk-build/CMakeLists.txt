@@ -67,15 +67,23 @@ set(SOURCES
     ../src/rendering/Swapchain.cpp
     ../src/rendering/Pipeline.cpp
     ../src/rendering/MeshBuffer.cpp
+    ../external/imgui/imgui.cpp
+    ../external/imgui/imgui_draw.cpp
+    ../external/imgui/imgui_tables.cpp
+    ../external/imgui/imgui_widgets.cpp
+    ../external/imgui/backends/imgui_impl_android.cpp
+    ../external/imgui/backends/imgui_impl_vulkan.cpp
 )
-
 
 add_library(mobilecad SHARED ${SOURCES})
 
 # Include directories: source tree first
 target_include_directories(mobilecad PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../external/imgui
+    ${CMAKE_CURRENT_SOURCE_DIR}/../external/imgui/backends
 )
+
 
 # Then add Vulkan include paths with explicit ordering:
 # 1) NDK sysroot's C++ bindings (must come first)

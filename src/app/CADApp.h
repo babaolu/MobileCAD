@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 
+#include "geometry/Primitives.h"
 #include "rendering/Camera.h"
 #include "rendering/MeshBuffer.h"
 #include "rendering/Pipeline.h"
@@ -14,6 +15,13 @@ namespace app
 {
 
 using Vertex = rendering::Vertex;
+
+enum class PrimitiveType
+{
+    Box,
+    Cylinder,
+    Sphere
+};
 
 class CADApp
 {
@@ -31,6 +39,9 @@ class CADApp
     void cleanup();
     void onWindowResized(ANativeWindow* window, int32_t width, int32_t height);
     void onTouchEvent(int32_t action, int32_t pointerCount, float x0, float y0, float x1, float y1);
+
+    // CAD Scene controls
+    void setPrimitive(PrimitiveType type);
 
     rendering::Camera& getCamera() { return m_camera; }
     const rendering::Camera& getCamera() const { return m_camera; }
@@ -70,12 +81,20 @@ class CADApp
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
     VkRenderPass m_renderPass{VK_NULL_HANDLE};
     VkPipeline m_pipeline{VK_NULL_HANDLE};      // Solid triangle pipeline
-    VkPipeline m_linePipeline{VK_NULL_HANDLE};  // Grid / axis line pipeline
+    VkPipeline m_linePipeline{VK_NULL_HANDLE};  // Grid / axis / wireframe line pipeline
     std::vector<VkFramebuffer> m_swapchainFramebuffers;
+
+    // Dear ImGui resources & state
+    VkDescriptorPool m_imguiDescriptorPool{VK_NULL_HANDLE};
+    PrimitiveType m_currentPrimitive{PrimitiveType::Box};
+    bool m_showGrid{true};
+    bool m_showSolid{true};
+    bool m_showWireframe{false};
 
     // Scene geometry
     std::unique_ptr<rendering::MeshBuffer> m_gridMesh;
     std::unique_ptr<rendering::MeshBuffer> m_solidMesh;
+    std::unique_ptr<rendering::MeshBuffer> m_wireframeMesh;
 
     // Sync per-frame
     uint32_t m_currentFrame{0};
@@ -88,11 +107,13 @@ class CADApp
     void initGraphicsPipeline();
     void initFramebuffers();
     void initSceneGeometry();
+    void initImGui(ANativeWindow* window);
 
     // Cleanup
     void cleanupSwapchain();
 
-    // Rendering
+    // UI & Rendering
+    void renderImGui();
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
 };
 

@@ -18,8 +18,10 @@ public:
     VkImageView getImageView(size_t index) const { return m_imageViews[index]; }
     VkFormat getImageFormat() const { return m_imageFormat; }
     VkExtent2D getExtent() const { return m_extent; }
+    uint32_t getImageCount() const { return static_cast<uint32_t>(m_images.size()); }
     VkImageView getDepthImageView() const { return m_depthImageView; }
     VkFormat getDepthFormat() const { return VK_FORMAT_D32_SFLOAT; }
+
 
 private:
     VulkanContext* m_context{nullptr};

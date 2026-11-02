@@ -39,3 +39,7 @@ debug.keystore
 # Staging ephemeral directory
 staging/
 
+# External third-party dependencies (auto-fetched by build scripts)
+external/imgui/
+
+
