@@ -1,176 +1,191 @@
 # MobileCAD
 
-A native Android CAD application built with C++20 and Vulkan, using Android NDK NativeActivity. No X11, no GLFW — runs directly on Android with zero translation overhead.
+[![Platform](https://img.shields.io/badge/Platform-Android%2014%2B%20(API%2034%2B)-green.svg)](https://developer.android.com)
+[![Architecture](https://img.shields.io/badge/Architecture-ARM64%20(arm64--v8a)-blue.svg)]()
+[![Vulkan](https://img.shields.io/badge/Graphics-Vulkan%201.4-red.svg)](https://www.vulkan.org)
+[![C++](https://img.shields.io/badge/Language-C%2B%2B20-orange.svg)]()
+[![Page%20Size](https://img.shields.io/badge/ELF%20Alignment-16%20KB%20Compliant-brightgreen.svg)]()
 
-## Features
+A high-performance, native Android 3D CAD application built from the ground up in C++20 and **Vulkan 1.4** (`VK_API_VERSION_1_4`). Designed specifically for touchscreens and active styluses (Samsung S-Pen), MobileCAD bypasses bloated intermediate abstractions (no X11, no Wayland, no GLFW, no Gradle) by interfacing directly with Android's `NativeActivity` and `ANativeWindow`.
 
-- C++20 with strict C++ Core Guidelines compliance
-- Vulkan 1.2+ for high-performance graphics
-- Android NDK NativeActivity (direct ANativeWindow)
-- Slang shader language with host compilation
-- Manual APK packaging (aapt2 + zipalign + apksigner), no Gradle
-- Validation layers for debugging
-- Optimized for mobile GPUs
+The entire engineering toolchain is self-hosting: configured, compiled, packaged, aligned, signed, and deployed **100% on-device** inside native Termux on a Samsung Galaxy S23 Ultra (Snapdragon 8 Gen 2 / Adreno 740 GPU).
 
-## Prerequisites
+---
 
-- **Android NDK**: r26+ (includes Clang, Vulkan headers, native_app_glue)
-- **Android SDK**: Command-line tools, build-tools, platform-sdk-34
-- **Build Tools**: Gradle 8+, CMake 3.20+, Ninja
-- **Shader Compiler**: Either `slangc` (recommended) or `glslangValidator` on the host
+## Technical Architecture
 
-### Setup
-
-```bash
-# Set ANDROID_NDK_HOME and ANDROID_HOME
-export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/26.1.10909125
-export ANDROID_HOME=$HOME/Android/Sdk
-
-# Verify NDK is available
-ls $ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake
+```
+                  +----------------------------------------------+
+                  |           Android OS / SurfaceFlinger        |
+                  +----------------------------------------------+
+                                         |
+                                         v
+                  +----------------------------------------------+
+                  |         NativeActivity (ANativeWindow)       |
+                  +----------------------------------------------+
+                                         |
+                +------------------------+------------------------+
+                |                                                 |
+                v                                                 v
+  +---------------------------+                     +---------------------------+
+  |    Touch & S-Pen Input    |                     |   Vulkan 1.4 Render Loop  |
+  |  (AMotionEvent / ALooper) |                     |   (2-Frame Sync Ring)     |
+  +---------------------------+                     +---------------------------+
+                |                                                 |
+                v                                                 v
+  +---------------------------+                     +---------------------------+
+  |      Arcball Camera       |                     |  Hardware Depth Buffer    |
+  | (Orbit / Pan / Pinch-Zoom)|                     |     (VK_FORMAT_D32_SFLOAT)|
+  +---------------------------+                     +---------------------------+
+                |                                                 |
+                +------------------------+------------------------+
+                                         |
+                                         v
+                  +----------------------------------------------+
+                  |       Dynamic Push Constants (MVP Matrix)    |
+                  +----------------------------------------------+
+                                         |
+                                         v
+                  +----------------------------------------------+
+                  |       Slang SPIR-V 1.3 Shader Pipeline       |
+                  |     (Adreno-optimized, bufferless cube)      |
+                  +----------------------------------------------+
 ```
 
-### Slang Shader Compiler
+### Core Graphics Engine
+- **Vulkan 1.4 API Core**: Initialized with `VK_API_VERSION_1_4` targeting modern mobile Vulkan drivers.
+- **Hardware Depth Buffer**: `VK_FORMAT_D32_SFLOAT` device-local attachment with optimal tiling and `VK_IMAGE_ASPECT_DEPTH_BIT`, enabling clean occlusion for complex 3D meshes.
+- **Two-Frame Synchronization Ring**: Double-buffered in-flight frame synchronization (`kMaxFrames = 2`) using dedicated fences and acquire/render semaphores, eliminating GPU pipeline stalls while respecting mobile thermal and driver constraints.
+- **Dynamic Viewport & Scissor**: Viewport and scissor states are bound dynamically (`VK_DYNAMIC_STATE_VIEWPORT`, `VK_DYNAMIC_STATE_SCISSOR`) to automatically accommodate Android multi-window, split-screen, and orientation changes without costly pipeline recreations.
+- **Push Constant Transform Dispatch**: High-throughput 64-byte vertex push constants (`VK_SHADER_STAGE_VERTEX_BIT`) dispatch the combined Model-View-Projection (MVP) matrix directly into fast command buffers without descriptor set allocation overhead.
 
-```bash
-# Build Slang from source (host machine)
-git clone https://github.com/shader-slang/slang.git
-cd slang && git submodule update --init --recursive
-mkdir build && cd build
-cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release
-ninja
-sudo cp bin/slangc /usr/local/bin/
+### Mobile-Optimized Shaders
+- **Slang Shading Language**: Shaders are authored in modern Slang (`.slang`) and compiled to SPIR-V.
+- **Adreno Compatibility Profile (`glsl_450+SPIRV_1_3`)**: Compiled targeting SPIR-V 1.3 to comply with Qualcomm Adreno mobile driver linker specifications, preventing non-input/output variables (such as PushConstant blocks) from invading the `OpEntryPoint` interface list.
+- **Algorithmic Bufferless Geometry**: The reference 3D CAD cube is procedurally evaluated in `simple.vert.slang` using vertex IDs, eliminating stack-allocated constant composite memory pressure.
 
-# Or use glslangValidator if available in your distro
-```
+### Custom 3D Math & Arcball Camera
+- **Vulkan NDC Clip Space**: Custom header-only math library (`Vec3<T>`, `Mat4<T>`) designed strictly for Vulkan right-handed clip space:
+  - Inverted Y-axis ($+Y$ down: $M_{1,1} = -\frac{1}{\tan(\text{fovy}/2)}$).
+  - Depth range normalized to $[0, 1]$ ($M_{2,2} = \frac{zFar}{zNear - zFar}$, $M_{2,3} = \frac{zFar \cdot zNear}{zNear - zFar}$).
+  - Canonical row-major matrix memory layout matching shader `row_major float4x4`.
+- **Spherical CAD Arcball Camera**:
+  - **Single-Finger / S-Pen Orbit**: Incremental azimuth (yaw) and elevation (pitch) rotation, clamped to $[-1.48, 1.48]$ radians to prevent gimbal lock.
+  - **Two-Finger Pinch-to-Zoom**: Continuous distance scaling relative to touch cluster distance.
+  - **Two-Finger Midpoint Pan**: Translates the camera focus target along the camera's local right and up axes proportional to distance and viewport height.
 
-## Building
+---
 
-> **ARM64 only.** All builds must use the hybrid toolchain at
-> `~/AI/arm64-ndk/arm64-android.toolchain.cmake`. Do NOT use Gradle — the `android/`
-> directory is tracked but its Gradle CMake paths are stale (`android/app/src/main/cpp/`
-> does not exist) and `android/app/src/main/AndroidManifest.xml` has `hasCode=false`.
+## 16 KB Page-Size Compliance
 
-```bash
-# From project root (inside PRoot/Termux)
+Modern Android 15+ devices and 64-bit ARM architectures require binaries to support **16 KB (16384 bytes)** virtual memory page sizes:
+1. **Application Shared Library (`libmobilecad.so`)**: Linked with `-Wl,-z,max-page-size=16384` to ensure ELF `LOAD` segments are aligned to 16 KB boundaries.
+2. **C++ Standard Library (`libc++_shared.so`)**: Because NDK r26 ships unaligned 4 KB `libc++_shared.so` prebuilts, MobileCAD's build pipeline dynamically re-links `libc++_static.a` and `libc++abi.a` with `-Wl,-z,max-page-size=16384`, caching the aligned runtime in `build/mcad-tmp/`.
+3. **APK Packaging Alignment**: Native `.so` libraries are stored uncompressed (`zip -0`) and aligned using `zipalign -P 16 4`, satisfying both the 16 KB memory-mapping requirement and standard 4-byte zip alignment.
 
-# 1. Compile shaders
-./scripts/compile_shaders.sh
+---
 
-# 2. Configure — ARM64 hybrid toolchain
-cmake -S ndk-build -B build \
-  -DCMAKE_TOOLCHAIN_FILE=~/AI/arm64-ndk/arm64-android.toolchain.cmake \
-  -DCMAKE_BUILD_TYPE=Debug -G Ninja
-
-# 3. Build .so
-ninja -C build   # → build/libmobilecad.so
-
-# 4. Generate classes.dex (before packaging)
-rm -rf /tmp/mcad-dex /tmp/mcad-classes /tmp/mcad-java
-mkdir -p /tmp/mcad-java /tmp/mcad-classes /tmp/mcad-dex
-echo 'package com.mobilecad; public class R {}' > /tmp/mcad-java/R.java
-echo 'package com.mobilecad; public class BuildConfig {}' > /tmp/mcad-java/BuildConfig.java
-javac -source 8 -target 8 -bootclasspath "$ANDROID_JAR" -d /tmp/mcad-classes /tmp/mcad-java/*.java 2>/dev/null
-/data/data/com.termux/files/home/android-sdk/build-tools/34.0.0/d8 \
-  --lib "$ANDROID_JAR" --output /tmp/mcad-dex /tmp/mcad-classes/com/mobilecad/*.class
-cp /tmp/mcad-dex/classes.dex staging/
-
-# 5. Package APK (aapt2 → zip → zipalign → apksigner)
-rm -rf staging && mkdir -p staging/lib/arm64-v8a
-cp build/libmobilecad.so staging/lib/arm64-v8a/
-cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" staging/lib/arm64-v8a/
-cp -r assets staging/
-cp /tmp/mcad-dex/classes.dex staging/
-# staging/AndroidManifest.xml is tracked in the repo and must be present
-aapt2 link -I "$ANDROID_JAR" --manifest staging/AndroidManifest.xml -A staging/assets -o mobilecad-base.apk
-cd staging && zip -ur ../mobilecad-base.apk lib/arm64-v8a/ && cd ..
-zipalign -v 4 mobilecad-base.apk mobilecad-aligned.apk
-apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
-  --ks-key-alias androiddebugkey mobilecad-aligned.apk
-```
-
-### Install on Device
-
-```bash
-adb install -r mobilecad-aligned.apk
-```
-
-### Launch
-
-```bash
-adb shell "am force-stop com.mobilecad; am start -n com.mobilecad/android.app.NativeActivity"
-```
-
-### View Logs
-
-```bash
-adb logcat -v threadtime | grep MobileCAD:
-```
-
-### Troubleshooting
-
-If ADB can't connect, the device is on `192.168.0.131:42113`:
-
-```bash
-adb connect 192.168.0.131:42113
-```
-
-Shaders compile to `shaders/compiled/*.spv` via `scripts/compile_shaders.sh`. The compiled `.spv` files are placed in `assets/shaders/` before APK packaging — no Gradle step.
-
-## Project Structure
+## Repository Structure
 
 ```
 MobileCAD/
-├── CMakeLists.txt              # Root build config (shader compilation)
-├── ndk-build/CMakeLists.txt    # ★ Primary CMake entry (NDK, linker flags, vk_video)
+├── assets/
+│   └── shaders/                     # Compiled SPIR-V shaders packaged into APK
+│       ├── simple.vert.spv
+│       └── simple.frag.spv
+├── ndk-build/
+│   ├── AndroidManifest.xml          # Canonical APK manifest (hasCode="true", NativeActivity)
+│   └── CMakeLists.txt               # Primary NDK CMake configuration
+├── scripts/
+│   ├── build_apk.sh                 # Full automated build, package, sign, & install pipeline
+│   ├── compile_shaders.sh           # Slang to SPIR-V compilation script
+│   └── setup_android.sh             # Native Termux environment dependency installer
 ├── src/
-│   ├── main.cpp                # NDK entry point — extern "C" android_main
-│   ├── app/CADApp.{h,cpp}      # Rendering orchestrator
+│   ├── main.cpp                     # NativeActivity entry point (android_main, input event loop)
+│   ├── app/
+│   │   ├── CADApp.h                 # Main application controller & touch dispatcher
+│   │   └── CADApp.cpp               # Vulkan swapchain, render pass, and frame orchestrator
 │   ├── rendering/
-│   │   ├── VulkanContext.{h,cpp}
-│   │   ├── Swapchain.{h,cpp}
-│   │   ├── Pipeline.{h,cpp}
-│   │   └── shaders/*.slang     # Slang sources → slangc → .spv
-│   └── utils/math/{Vec3,Mat4}.h
-├── scripts/compile_shaders.sh  # Standalone shader build
-├── assets/shaders/*.spv        # Bundled into APK at package time
-├── staging/AndroidManifest.xml # APK manifest template (tracked, not ephemeral)
+│   │   ├── Camera.h                 # Spherical Arcball camera (orbit, pan, zoom)
+│   │   ├── VulkanContext.{h,cpp}    # VkInstance, VkDevice, Surface, Queues, Sync objects
+│   │   ├── Swapchain.{h,cpp}        # VkSwapchainKHR, VkImageViews, Depth buffer (D32_SFLOAT)
+│   │   ├── Pipeline.{h,cpp}         # SPIR-V asset loader and VkShaderModule factory
+│   │   └── shaders/
+│   │       ├── simple.vert.slang    # Procedural 3D reference cube & MVP transform
+│   │       └── simple.frag.slang    # Fragment color output
+│   └── utils/math/
+│       ├── Vec3.h                   # 3D vector math (dot, cross, normalize)
+│       └── Mat4.h                   # 4x4 matrix transforms (perspective, lookAt, rotations)
 └── README.md
 ```
 
-`android/` is tracked but its Gradle CMake paths and its `AndroidManifest.xml`
-(`hasCode=false`, wrong `src/main/cpp/` path) are **not used** by the ARM64 build.
-Do not reference `android/app/src/main/assets/shaders/` or `app/build/outputs/apk/`.
+---
 
-## Development
+## On-Device Build & Deployment Workflow
 
-### Prerequisites
-
-- Android SDK: `ANDROID_JAR` at `platforms/android-34/android.jar`
-- Android NDK r26 at `ANDROID_NDK_HOME` (env var)
-- `slangc` on PATH (build Slang via `scripts/build_slang.sh` if needed)
-
-### Code Style
-
-- C++20, Allman braces, 4-space indent, left pointer alignment (`int* p`)
-- `clang-format -i src/**/*.cpp src/**/*.h`
-
-### Debugging
-
+### 1. Prerequisites (Inside Native Termux)
+Run the setup script to install Clang, CMake, Ninja, OpenJDK, and Android build tools:
 ```bash
-adb logcat -v threadtime | grep MobileCAD:
-adb logcat -v threadtime | grep MobileCAD: && adb logcat AndroidRuntime:* *:E
+./scripts/setup_android.sh
 ```
 
-Key logcat milestones:
-- `android_main ENTERED` — NDK lifecycle working
-- `CADApp::init: starting` → `CADApp::init: done` — Vulkan init OK
-- `drawFrame step-5: acquire result=0` — swapchain image acquired
-- `onWindowResized step-7: initFramebuffers` — resize rebuild OK
+Ensure your environment variables are configured (e.g., in `~/.bashrc`):
+```bash
+export ANDROID_JAR=$HOME/android-sdk/platforms/android-34/android.jar
+export ANDROID_NDK_HOME=$HOME/android-sdk/ndk/26.1.10909125
+```
 
-### Deeper docs
+### 2. Compile Shaders
+If modifying `.slang` sources, compile them to SPIR-V (using `slangc`):
+```bash
+./scripts/compile_shaders.sh
+```
 
-See [CLAUDE.md](CLAUDE.md) for architecture, Vulkan object lifetimes, error-handling patterns, and
-C++ Core Guidelines compliance. See [BUILD_FIXES.md](BUILD_FIXES.md) for the full history of
-build issues and their fixes.
+### 3. One-Command Build & Run
+To compile `libmobilecad.so`, generate `classes.dex`, assemble the staging package, align to 16 KB, sign with debug keystore, and install over wireless ADB:
+```bash
+./scripts/build_apk.sh
+```
 
+If an active ADB device is connected (e.g. `adb connect 192.168.0.x:<port>`), `build_apk.sh` automatically installs `mobilecad-aligned.apk` and launches `com.mobilecad/android.app.NativeActivity`.
+
+### 4. Live Logcat Monitoring
+```bash
+adb logcat -v threadtime -s MobileCAD
+```
+
+Expected startup sequence:
+```text
+MobileCAD: android_main ENTERED
+MobileCAD: CADApp::init: starting
+MobileCAD: VulkanContext created
+MobileCAD: Swapchain created: format=37, extent=1080x2316
+MobileCAD: Render pass initialized
+MobileCAD: Pipeline layout initialized
+MobileCAD: Graphics pipeline initialized
+MobileCAD: Framebuffers initialized
+MobileCAD: CADApp::init: done
+MobileCAD: onWindowResized: rebuild complete swap=1080x2316
+```
+
+---
+
+## Development Roadmap
+
+- [x] **Phase 0 — Toolchain Foundation**: On-device ARM64 Clang/CMake/Ninja build system in Termux.
+- [x] **Phase 1 — Vulkan 1.4 Render Loop**: Stable `NativeActivity` event loop, 2-frame synchronization ring, device-lost recovery.
+- [x] **Phase 2 — Non-Gradle Packaging**: Standalone `aapt2`, `d8` stub dex generator, `zipalign`, and `apksigner` automation.
+- [x] **Phase 3 — 16 KB Page-Size Compliance**: Segment alignment enforcement for `libmobilecad.so` and `libc++_shared.so`.
+- [x] **Phase 4 — Diagnostic Cleanliness**: Silenced per-frame log spam and verified lifecycle transitions.
+- [x] **Phase 5 — Dynamic Surface & Color**: Enabled dynamic viewport/scissor and resolved composite alpha blending.
+- [x] **Phase 6 — 3D Projection & Depth Buffer**: Hardware `VK_FORMAT_D32_SFLOAT` depth buffer, push constant MVP dispatch, and procedural reference cube.
+- [x] **Phase 7 — Touch & S-Pen CAD Camera**: Spherical Arcball camera supporting single-pointer orbit, two-pointer pinch zoom, and pan.
+- [ ] **Phase 9 — Memory Allocator & CAD Grid**: Integration of Vulkan Memory Allocator (VMA), device-local vertex/index buffers, and an infinite anti-aliased CAD reference ground plane grid.
+- [ ] **Phase 10 — Viewport UI Overlay**: Dear ImGui Vulkan backend for view gizmos, projection switches (orthographic/perspective), and touch control toolbars.
+- [ ] **Phase 11 — Geometric Modeling Kernel**: Integration of Manifold C++20 CSG library for Boolean operations, polygon meshes, and parametric solids.
+
+---
+
+## License
+
+Licensed under the [MIT License](LICENSE).

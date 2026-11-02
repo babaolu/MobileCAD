@@ -372,8 +372,93 @@ tombstone tells you exactly which Vulkan call path triggered it.
 
 ---
 
-**Last updated:** 2026-05-19  
-**Status:** ✅ Compiled, APK signed + verified, installed, app launches — `drawFrame` cycles
-through swapchain images 0…5 before crashing on frame 6 (vkQueueSubmit failure post-resize,
-m_pipelineLayout / m_renderPass null-guard and recordCommandBuffer null-guard in place to
-catch and recover).
+## 16. GWP-ASan TLS Initial Exec Error & API 34 Linker Path Fix
+
+**Problem:**  
+When launching on Android 14 (API 34), `dlopen("libmobilecad.so")` failed with:
+```text
+dlopen failed: TLS symbol "_ZZN8gwp_asan15getThreadLocalsEvE6Locals" using IE access model
+```
+The linker fell back to the sysroot root containing static `libc.a` instead of the API 34 dynamic runtime directory, linking GWP-ASan statically with Initial-Exec (`IE`) TLS which Android's dynamic linker forbids for `dlopen`'d shared libraries.
+
+**Fix** (`ndk-build/CMakeLists.txt`):
+Add `-L${CMAKE_SYSROOT}/usr/lib/aarch64-linux-android/34` before sysroot roots to force dynamic linking against the system's `libc.so`, `-lc`, `-lm`, and `-ldl`.
+
+---
+
+## 17. Android 16 KB Page-Size ELF Alignment Enforcement
+
+**Problem:**  
+Android 15+ displays `PageSizeMismatchDialog` warnings when native libraries have ELF segments aligned to 4 KB (`0x1000`) instead of 16 KB (`0x4000`). Furthermore, NDK r26 ships prebuilt `libc++_shared.so` with 4 KB alignment.
+
+**Fix** (`ndk-build/CMakeLists.txt` & `scripts/build_apk.sh`):
+1. Passed `-Wl,-z,max-page-size=16384` to `target_link_options(mobilecad PRIVATE ...)` for `libmobilecad.so`.
+2. Synthesized a 16 KB-aligned `libc++_shared.so` by re-linking NDK `libc++_static.a` and `libc++abi.a` with `-Wl,-z,max-page-size=16384` and caching it in `build/mcad-tmp/`.
+3. Packaged both libraries uncompressed (`zip -0`) and aligned the APK with `zipalign -P 16 4`.
+
+---
+
+## 18. Unbound Vertex Input Buffer GPU Fault & Bufferless Shaders
+
+**Problem:**  
+The graphics pipeline declared 1 vertex binding description and 2 attribute descriptions, expecting bound vertex buffers. However, `vkCmdDraw` was called without `vkCmdBindVertexBuffers`, causing Adreno GPU memory faults when fetching vertex attributes.
+
+**Fix** (`src/app/CADApp.cpp`):
+Set `vertexBindingDescriptionCount = 0` and `vertexAttributeDescriptionCount = 0` in `VkPipelineVertexInputStateCreateInfo`. Shaders generate vertex coordinates procedurally via `SV_VertexID` / procedural logic.
+
+---
+
+## 19. Dynamic Viewport/Scissor, Culling, & Composite Alpha Fallback
+
+**Problem:**  
+Triangles were clipped or invisible because:
+1. Static viewports were clipped during Android window resize events.
+2. Backface culling (`VK_CULL_MODE_BACK_BIT`) discarded triangles with inverted screen winding.
+3. Strict composite alpha flags (`VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR`) were unsupported on certain Android surface formats.
+
+**Fix** (`src/app/CADApp.cpp`, `src/rendering/Swapchain.cpp`):
+1. Configured dynamic viewport and scissor states: `VK_DYNAMIC_STATE_VIEWPORT`, `VK_DYNAMIC_STATE_SCISSOR` set via `vkCmdSetViewport` and `vkCmdSetScissor` each frame.
+2. Changed `rasterizer.cullMode = VK_CULL_MODE_NONE`.
+3. Implemented surface composite alpha fallback checking `VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR` vs `VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR`.
+
+---
+
+## 20. Hardware Depth Buffer Integration (`VK_FORMAT_D32_SFLOAT`) & Teardown Order
+
+**Problem:**  
+Without a depth buffer, overlapping 3D CAD geometry rendered with incorrect visual depth ordering. Additionally, destroying Vulkan context before swapchain teardown caused SIGSEGV at `0x90` on window termination.
+
+**Fix** (`src/rendering/Swapchain.{h,cpp}`, `src/app/CADApp.cpp`):
+1. Created depth attachment `m_depthImage` with format `VK_FORMAT_D32_SFLOAT`, optimal tiling, and allocated `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT` memory.
+2. Added depth attachment to `m_renderPass` and bound depth image views to all swapchain framebuffers.
+3. Enabled pipeline depth testing and writing: `depthTestEnable = VK_TRUE`, `depthWriteEnable = VK_TRUE`, `depthCompareOp = VK_COMPARE_OP_LESS`.
+4. Enforced strict teardown sequence: `vkDeviceWaitIdle()` -> `cleanupSwapchain()` -> `m_swapchain.reset()` -> `m_vkContext.reset()`.
+
+---
+
+## 21. Qualcomm Adreno Shader Linker Failure: SPIR-V 1.3 Profile
+
+**Problem:**  
+When push constants were added to `simple.vert.slang`, Slang compiled to SPIR-V 1.5, placing the PushConstant variable `%pc` into the `OpEntryPoint` interface list. The Qualcomm Adreno Vulkan driver strictly implements SPIR-V 1.3 interface rules where `OpEntryPoint` may only contain Input and Output storage classes, logging:
+```text
+AdrenoVK-0: Failed to link shaders.
+AdrenoVK-0: Pipeline create failed
+```
+
+**Fix** (`scripts/compile_shaders.sh`):
+Added `-profile glsl_450+SPIRV_1_3` to `slangc`. In SPIR-V 1.3, PushConstant blocks are omitted from the `OpEntryPoint` parameter list, allowing Qualcomm's driver to link vertex and fragment stages cleanly.
+
+---
+
+## 22. Procedural Geometry vs Function-Local Composite Stack Arrays
+
+**Problem:**  
+Declaring `static const float3 positions[36]` inside `simple.vert.slang` caused Slang to emit `OpConstantComposite` with 36 elements and an `OpStore` into a function-local array on every vertex invocation, exhausting mobile vertex shader vector registers and failing compilation on Adreno.
+
+**Fix** (`src/rendering/shaders/simple.vert.slang`):
+Replaced the 36-element array with an algorithmic cube generator `getCubePos(uint id)` and `getCubeColor(uint id)` using arithmetic evaluation, eliminating all stack array copies.
+
+---
+
+**Last updated:** 2026-11-02  
+**Status:** ✅ Fully operational. 16 KB page-size compliant, hardware depth-buffered Vulkan 1.4 render loop with push constants, procedural 3D CAD cube, and interactive multi-touch / S-Pen spherical Arcball camera. Verified on Samsung Galaxy S23 Ultra (Adreno 740).

@@ -14,13 +14,6 @@ install_manifest.txt
 
 # Compiled shaders (generated)
 shaders/compiled/
-android/app/src/main/assets/
-
-# Gradle
-.gradle/
-android/build/
-android/app/build/
-android/.gradle/
 
 # IDE
 .idea/
@@ -43,8 +36,6 @@ logcat_*.txt
 debug.keystore
 *.png
 
-# Staging ephemeral contents (keep staging/AndroidManifest.xml tracked)
-staging/assets/
-staging/classes.dex
-staging/lib/
+# Staging ephemeral directory
+staging/
 

@@ -75,10 +75,10 @@ bash "${D8}" --lib "${ANDROID_JAR}" --output build/mcad-tmp/dex build/mcad-tmp/c
 
 # 6. Assemble staging directory
 echo "--- Assembling staging directory ---"
-# Persistent source manifest: prefer android/AndroidManifest.xml, fallback to staging/AndroidManifest.xml
-MANIFEST_SRC="android/AndroidManifest.xml"
+# Canonical source manifest: prefer ndk-build/AndroidManifest.xml, fallback to staging/AndroidManifest.xml
+MANIFEST_SRC="${ROOT_DIR}/ndk-build/AndroidManifest.xml"
 if [ ! -f "${MANIFEST_SRC}" ]; then
-    MANIFEST_SRC="staging/AndroidManifest.xml"
+    MANIFEST_SRC="${ROOT_DIR}/staging/AndroidManifest.xml"
 fi
 
 rm -rf staging
