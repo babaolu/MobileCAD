@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "manifold/manifold.h"
 #include "rendering/MeshBuffer.h"
 
 namespace geometry
@@ -246,7 +247,137 @@ class Primitives
         return {std::move(vertices), std::move(indices)};
     }
 
-    // 4. Feature Edge Wireframe Lines (LINE_LIST, normal={0,0,0} for unlit crisp rendering)
+    // Convert Manifold solid to MeshData with outward normals
+    static MeshData fromManifold(const manifold::Manifold& m, const float defaultColor[3] = nullptr)
+    {
+        std::vector<rendering::Vertex> vertices;
+        std::vector<uint32_t> indices;
+
+        const float defCol[3] = {0.35f, 0.65f, 0.95f};  // Anodized CAD Blue
+        const float* col = defaultColor ? defaultColor : defCol;
+
+        manifold::Manifold withNormals = m.CalculateNormals(3, 52.5);
+        manifold::MeshGL gl = withNormals.GetMeshGL();
+
+        indices = std::move(gl.triVerts);
+        size_t numVerts = gl.NumVert();
+        vertices.reserve(numVerts);
+
+        int numProp = gl.numProp;
+        for (size_t i = 0; i < numVerts; ++i)
+        {
+            float px = gl.vertProperties[i * numProp + 0];
+            float py = gl.vertProperties[i * numProp + 1];
+            float pz = gl.vertProperties[i * numProp + 2];
+            float nx = 0.0f, ny = 1.0f, nz = 0.0f;
+            if (numProp >= 6)
+            {
+                nx = gl.vertProperties[i * numProp + 3];
+                ny = gl.vertProperties[i * numProp + 4];
+                nz = gl.vertProperties[i * numProp + 5];
+            }
+            vertices.push_back({{px, py, pz}, {nx, ny, nz}, {col[0], col[1], col[2]}});
+        }
+
+        if (numProp < 6 && indices.size() >= 3)
+        {
+            for (size_t t = 0; t + 2 < indices.size(); t += 3)
+            {
+                uint32_t i0 = indices[t];
+                uint32_t i1 = indices[t + 1];
+                uint32_t i2 = indices[t + 2];
+
+                float e1[3] = {vertices[i1].position[0] - vertices[i0].position[0],
+                               vertices[i1].position[1] - vertices[i0].position[1],
+                               vertices[i1].position[2] - vertices[i0].position[2]};
+                float e2[3] = {vertices[i2].position[0] - vertices[i0].position[0],
+                               vertices[i2].position[1] - vertices[i0].position[1],
+                               vertices[i2].position[2] - vertices[i0].position[2]};
+
+                float fn[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
+                               e1[0] * e2[1] - e1[1] * e2[0]};
+                float len = std::hypot(std::hypot(fn[0], fn[1]), fn[2]);
+                if (len > 1e-6f)
+                {
+                    fn[0] /= len;
+                    fn[1] /= len;
+                    fn[2] /= len;
+                }
+
+                vertices[i0].normal[0] = fn[0];
+                vertices[i0].normal[1] = fn[1];
+                vertices[i0].normal[2] = fn[2];
+                vertices[i1].normal[0] = fn[0];
+                vertices[i1].normal[1] = fn[1];
+                vertices[i1].normal[2] = fn[2];
+                vertices[i2].normal[0] = fn[0];
+                vertices[i2].normal[1] = fn[1];
+                vertices[i2].normal[2] = fn[2];
+            }
+        }
+
+        return {std::move(vertices), std::move(indices)};
+    }
+
+    // 4. CSG Difference / Subtract (Drilled Mechanical Bracket: Box minus cylindrical bore)
+    static MeshData createCsgDifference(float width = 1.6f, float height = 1.2f, float depth = 1.6f,
+                                        float holeRadius = 0.35f, int segments = 32)
+    {
+        manifold::Manifold box = manifold::Manifold::Cube({width, height, depth}, true)
+                                     .Translate({0.0, height * 0.5, 0.0});
+        manifold::Manifold hole =
+            manifold::Manifold::Cylinder(height * 1.5, holeRadius, holeRadius, segments, true)
+                .Translate({0.0, height * 0.5, 0.0});
+        manifold::Manifold result = box - hole;
+        const float bronze[3] = {0.85f, 0.65f, 0.35f};
+        return fromManifold(result, bronze);
+    }
+
+    // 5. CSG Union (Base Plate + Cylindrical Boss/Hub)
+    static MeshData createCsgUnion(float width = 1.6f, float height = 1.2f, float depth = 1.6f,
+                                   float cylRadius = 0.5f, int segments = 32)
+    {
+        float baseH = height * 0.4f;
+        float bossH = height * 0.8f;
+        manifold::Manifold base = manifold::Manifold::Cube({width, baseH, depth}, true)
+                                      .Translate({0.0, baseH * 0.5, 0.0});
+        manifold::Manifold boss =
+            manifold::Manifold::Cylinder(bossH, cylRadius, cylRadius, segments, false)
+                .Translate({0.0, baseH * 0.5, 0.0});
+        manifold::Manifold result = base + boss;
+        const float steel[3] = {0.45f, 0.70f, 0.90f};
+        return fromManifold(result, steel);
+    }
+
+    // 6. CSG Intersection (Rounded Solid Part: Box ^ Sphere)
+    static MeshData createCsgIntersection(float width = 1.6f, float height = 1.2f,
+                                          float depth = 1.6f, float sphereRadius = 1.0f,
+                                          int segments = 32)
+    {
+        manifold::Manifold box = manifold::Manifold::Cube({width, height, depth}, true)
+                                     .Translate({0.0, height * 0.5, 0.0});
+        manifold::Manifold sphere =
+            manifold::Manifold::Sphere(sphereRadius, segments).Translate({0.0, height * 0.5, 0.0});
+        manifold::Manifold result = box ^ sphere;
+        const float gold[3] = {0.92f, 0.76f, 0.35f};
+        return fromManifold(result, gold);
+    }
+
+    // 7. CSG Hollow Cylinder (Bored Pipe with exact inner and outer walls)
+    static MeshData createHollowCylinder(float outerRadius = 0.7f, float innerRadius = 0.4f,
+                                         float height = 1.4f, int segments = 32)
+    {
+        manifold::Manifold outer =
+            manifold::Manifold::Cylinder(height, outerRadius, outerRadius, segments, false);
+        manifold::Manifold inner =
+            manifold::Manifold::Cylinder(height * 1.5, innerRadius, innerRadius, segments, true)
+                .Translate({0.0, height * 0.5, 0.0});
+        manifold::Manifold result = outer - inner;
+        const float cyan[3] = {0.30f, 0.75f, 0.85f};
+        return fromManifold(result, cyan);
+    }
+
+    // 8. Feature Edge Wireframe Lines (LINE_LIST, normal={0,0,0} for unlit crisp rendering)
     static std::vector<rendering::Vertex> createWireframeLines(
         const std::vector<rendering::Vertex>& verts, const std::vector<uint32_t>& indices,
         const float color[3] = nullptr)

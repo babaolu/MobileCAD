@@ -41,6 +41,13 @@ static void handleCmd(android_app* app, int32_t cmd)
         try
         {
             g_cadApp = std::make_unique<app::CADApp>(app->window);
+            if (app->activity && app->activity->internalDataPath)
+            {
+                std::string stlPath =
+                    std::string(app->activity->internalDataPath) + "/part_export.stl";
+                g_cadApp->setExportPath(stlPath);
+                LOGI("Set STL export path: %s", stlPath.c_str());
+            }
             LOGI("CADApp created successfully");
         }
         catch (const std::exception& e)

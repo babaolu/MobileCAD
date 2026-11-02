@@ -425,36 +425,97 @@ void CADApp::initSceneGeometry()
     m_gridMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, gridVertices);
 
     // 2. 3D Solid CAD Part & Wireframe feature lines
-    setPrimitive(PrimitiveType::Box);
+    rebuildGeometry();
 }
 
-void CADApp::setPrimitive(PrimitiveType type)
+void CADApp::rebuildGeometry()
 {
-    m_currentPrimitive = type;
     auto device = m_vkContext->getDevice();
     auto physDevice = m_vkContext->getPhysicalDevice();
 
     vkDeviceWaitIdle(device);
 
     geometry::Primitives::MeshData data;
-    switch (type)
+    if (m_params.csgMode == 0)
     {
-    case PrimitiveType::Box:
-        data = geometry::Primitives::createBox(1.5f, 1.5f, 1.5f);
-        break;
-    case PrimitiveType::Cylinder:
-        data = geometry::Primitives::createCylinder(0.6f, 1.2f, 32);
-        break;
-    case PrimitiveType::Sphere:
-        data = geometry::Primitives::createSphere(0.6f, 24, 32);
-        break;
+        switch (m_currentPrimitive)
+        {
+        case PrimitiveType::Box:
+            data = geometry::Primitives::createBox(m_params.width, m_params.height, m_params.depth);
+            break;
+        case PrimitiveType::Cylinder:
+            data = geometry::Primitives::createCylinder(m_params.radius, m_params.height,
+                                                        static_cast<uint32_t>(m_params.segments));
+            break;
+        case PrimitiveType::Sphere:
+            data = geometry::Primitives::createSphere(
+                m_params.radius, static_cast<uint32_t>(m_params.segments * 3 / 4),
+                static_cast<uint32_t>(m_params.segments));
+            break;
+        }
     }
+    else if (m_params.csgMode == 1)
+    {
+        data = geometry::Primitives::createCsgDifference(m_params.width, m_params.height,
+                                                         m_params.depth, m_params.holeRadius,
+                                                         m_params.segments);
+    }
+    else if (m_params.csgMode == 2)
+    {
+        data = geometry::Primitives::createCsgUnion(m_params.width, m_params.height, m_params.depth,
+                                                    m_params.radius, m_params.segments);
+    }
+    else if (m_params.csgMode == 3)
+    {
+        data = geometry::Primitives::createCsgIntersection(
+            m_params.width, m_params.height, m_params.depth, m_params.radius, m_params.segments);
+    }
+    else if (m_params.csgMode == 4)
+    {
+        data = geometry::Primitives::createHollowCylinder(m_params.radius, m_params.holeRadius,
+                                                          m_params.height, m_params.segments);
+    }
+
+    m_currentVertices = data.first;
+    m_currentIndices = data.second;
 
     auto wireLines = geometry::Primitives::createWireframeLines(data.first, data.second);
 
     m_solidMesh =
         std::make_unique<rendering::MeshBuffer>(device, physDevice, data.first, data.second);
     m_wireframeMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, wireLines);
+}
+
+void CADApp::setPrimitive(PrimitiveType type)
+{
+    m_params.csgMode = 0;
+    m_currentPrimitive = type;
+    rebuildGeometry();
+}
+
+bool CADApp::exportSTL()
+{
+    if (m_currentVertices.empty() || m_currentIndices.size() < 3)
+    {
+        m_exportStatus = "Export error: No geometry";
+        return false;
+    }
+
+    bool ok = io::MeshExporter::exportBinarySTL(m_exportPath, m_currentVertices, m_currentIndices);
+    if (ok)
+    {
+        uint32_t triCount = static_cast<uint32_t>(m_currentIndices.size() / 3);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "Exported: %u tris to part_export.stl", triCount);
+        m_exportStatus = buf;
+        LOGI("%s (%s)", buf, m_exportPath.c_str());
+    }
+    else
+    {
+        m_exportStatus = "Export failed (check permissions)";
+        LOGE("Failed to export STL to %s", m_exportPath.c_str());
+    }
+    return ok;
 }
 
 void CADApp::initImGui(ANativeWindow* window)
@@ -523,19 +584,13 @@ void CADApp::initImGui(ANativeWindow* window)
 void CADApp::renderImGui()
 {
     ImGui::SetNextWindowPos(ImVec2(30.0f, 30.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowBgAlpha(0.85f);
+    ImGui::SetNextWindowBgAlpha(0.88f);
     if (ImGui::Begin("MobileCAD Studio", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        // Performance & Stats
+        // 1. Performance & Stats
         float fps = ImGui::GetIO().Framerate;
-        uint32_t vertCount = 0;
-        uint32_t triCount = 0;
-        if (m_solidMesh && m_showSolid)
-        {
-            vertCount += m_solidMesh->getVertexCount();
-            triCount += m_solidMesh->hasIndices() ? (m_solidMesh->getIndexCount() / 3)
-                                                  : (m_solidMesh->getVertexCount() / 3);
-        }
+        uint32_t vertCount = static_cast<uint32_t>(m_currentVertices.size());
+        uint32_t triCount = static_cast<uint32_t>(m_currentIndices.size() / 3);
         if (m_gridMesh && m_showGrid)
         {
             vertCount += m_gridMesh->getVertexCount();
@@ -545,12 +600,14 @@ void CADApp::renderImGui()
             vertCount += m_wireframeMesh->getVertexCount();
         }
 
-        ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "Vulkan 1.4 Native CAD");
-        ImGui::Text("FPS: %.1f (%.2f ms/frame)", fps, 1000.0f / (fps > 0.0f ? fps : 60.0f));
-        ImGui::Text("Vertices: %u | Triangles: %u", vertCount, triCount);
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Vulkan 1.4 Native CAD");
+        ImGui::Text("FPS: %.1f (%.2f ms/frame) | %s", fps, 1000.0f / (fps > 0.0f ? fps : 60.0f),
+                    m_vsyncEnabled ? "VSync 120Hz" : "Unlocked");
+        ImGui::Text("Solid: %u verts, %u tris (Total: %u)",
+                    static_cast<uint32_t>(m_currentVertices.size()), triCount, vertCount);
         ImGui::Separator();
 
-        // View Presets
+        // 2. View Presets
         ImGui::Text("Camera Presets:");
         if (ImGui::Button("Iso"))
         {
@@ -576,33 +633,96 @@ void CADApp::renderImGui()
         {
             m_camera.resetView();
         }
-        ImGui::Separator();
 
-        // Parametric Primitives
-        ImGui::Text("Parametric Primitive:");
-        if (ImGui::RadioButton("Box", m_currentPrimitive == PrimitiveType::Box))
+        // 3. Parametric Modeling & CSG Section
+        if (ImGui::CollapsingHeader("Parameters & CSG", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            setPrimitive(PrimitiveType::Box);
-        }
-        ImGui::SameLine();
-        if (ImGui::RadioButton("Cylinder", m_currentPrimitive == PrimitiveType::Cylinder))
-        {
-            setPrimitive(PrimitiveType::Cylinder);
-        }
-        ImGui::SameLine();
-        if (ImGui::RadioButton("Sphere", m_currentPrimitive == PrimitiveType::Sphere))
-        {
-            setPrimitive(PrimitiveType::Sphere);
-        }
-        ImGui::Separator();
+            bool changed = false;
 
-        // Display Toggles
-        ImGui::Text("Display Layers:");
-        ImGui::Checkbox("Grid & Triad", &m_showGrid);
-        ImGui::SameLine();
-        ImGui::Checkbox("Solid", &m_showSolid);
-        ImGui::SameLine();
-        ImGui::Checkbox("Wireframe", &m_showWireframe);
+            const char* csgItems[] = {"Solid Primitive", "Subtract (Drill Hole)",
+                                      "Union (Boss Hub)", "Intersect (Box ^ Sphere)",
+                                      "Hollow Cylinder Pipe"};
+            if (ImGui::Combo("CSG Op", &m_params.csgMode, csgItems, IM_ARRAYSIZE(csgItems)))
+            {
+                changed = true;
+            }
+
+            if (m_params.csgMode == 0)
+            {
+                ImGui::Text("Primitive:");
+                if (ImGui::RadioButton("Box", m_currentPrimitive == PrimitiveType::Box))
+                {
+                    m_currentPrimitive = PrimitiveType::Box;
+                    changed = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Cylinder", m_currentPrimitive == PrimitiveType::Cylinder))
+                {
+                    m_currentPrimitive = PrimitiveType::Cylinder;
+                    changed = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Sphere", m_currentPrimitive == PrimitiveType::Sphere))
+                {
+                    m_currentPrimitive = PrimitiveType::Sphere;
+                    changed = true;
+                }
+            }
+
+            // Parametric Sliders
+            if (m_currentPrimitive == PrimitiveType::Box || m_params.csgMode > 0)
+            {
+                changed |= ImGui::SliderFloat("Width", &m_params.width, 0.2f, 4.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Height", &m_params.height, 0.2f, 4.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Depth", &m_params.depth, 0.2f, 4.0f, "%.2f");
+            }
+            if (m_currentPrimitive == PrimitiveType::Cylinder ||
+                m_currentPrimitive == PrimitiveType::Sphere || m_params.csgMode > 0)
+            {
+                changed |= ImGui::SliderFloat("Radius", &m_params.radius, 0.1f, 2.0f, "%.2f");
+            }
+            if (m_params.csgMode == 1 || m_params.csgMode == 4)
+            {
+                changed |=
+                    ImGui::SliderFloat("Hole Radius", &m_params.holeRadius, 0.05f, 1.8f, "%.2f");
+            }
+            if (m_currentPrimitive == PrimitiveType::Cylinder ||
+                m_currentPrimitive == PrimitiveType::Sphere || m_params.csgMode > 0)
+            {
+                changed |= ImGui::SliderInt("Segments", &m_params.segments, 8, 64);
+            }
+
+            if (changed)
+            {
+                rebuildGeometry();
+            }
+        }
+
+        // 4. Display Layers
+        if (ImGui::CollapsingHeader("Display Layers & VSync", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::Checkbox("Grid & Triad", &m_showGrid);
+            ImGui::SameLine();
+            ImGui::Checkbox("Solid", &m_showSolid);
+            ImGui::SameLine();
+            ImGui::Checkbox("Wireframe", &m_showWireframe);
+
+            ImGui::Checkbox("VSync (120Hz)", &m_vsyncEnabled);
+        }
+
+        // 5. Watertight Binary STL Export
+        if (ImGui::CollapsingHeader("Binary STL Export", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            if (ImGui::Button("Export STL Model", ImVec2(-1.0f, 0.0f)))
+            {
+                exportSTL();
+            }
+            if (!m_exportStatus.empty())
+            {
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", m_exportStatus.c_str());
+            }
+            ImGui::TextDisabled("File: part_export.stl");
+        }
     }
     ImGui::End();
 }

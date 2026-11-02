@@ -58,6 +58,17 @@ add_library(android_native_app_glue STATIC ${ANDROID_NATIVE_APP_GLUE_SRC})
 target_include_directories(android_native_app_glue PUBLIC "${NDK_ROOT}/sources/android/native_app_glue")
 
 # ----------------------------------------------------------------------
+# Manifold 3D CSG library
+# ----------------------------------------------------------------------
+set(MANIFOLD_PAR OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_TEST OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_CBIND OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_PYBIND OFF CACHE BOOL "" FORCE)
+set(MANIFOLD_JSBIND OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../external/manifold manifold EXCLUDE_FROM_ALL)
+
+# ----------------------------------------------------------------------
 # Shared library (loaded by NativeActivity)
 # ----------------------------------------------------------------------
 set(SOURCES
@@ -82,6 +93,7 @@ target_include_directories(mobilecad PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${CMAKE_CURRENT_SOURCE_DIR}/../external/imgui
     ${CMAKE_CURRENT_SOURCE_DIR}/../external/imgui/backends
+    ${CMAKE_CURRENT_SOURCE_DIR}/../external/manifold/include
 )
 
 
@@ -98,6 +110,7 @@ target_link_libraries(mobilecad PRIVATE
     ${log-lib}
     "-Wl,--whole-archive" android_native_app_glue "-Wl,--no-whole-archive"
     Vulkan::Vulkan
+    manifold
 )
 
 # Use compiler-rt and libunwind instead of libgcc, and point to NDK's clang resource libs

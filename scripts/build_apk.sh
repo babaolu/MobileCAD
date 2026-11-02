@@ -32,6 +32,12 @@ if [ ! -d "${ROOT_DIR}/external/imgui" ]; then
     git clone --depth 1 -b docking https://github.com/ocornut/imgui.git "${ROOT_DIR}/external/imgui"
 fi
 
+# Ensure external/manifold exists
+if [ ! -d "${ROOT_DIR}/external/manifold" ]; then
+    echo "--- Cloning Manifold into external/manifold ---"
+    git clone --depth 1 https://github.com/elalish/manifold.git "${ROOT_DIR}/external/manifold"
+fi
+
 # 2. Compile Shaders
 
 echo "--- Compiling shaders ---"

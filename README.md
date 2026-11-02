@@ -180,9 +180,9 @@ MobileCAD: onWindowResized: rebuild complete swap=1080x2316
 - [x] **Phase 5 — Dynamic Surface & Color**: Enabled dynamic viewport/scissor and resolved composite alpha blending.
 - [x] **Phase 6 — 3D Projection & Depth Buffer**: Hardware `VK_FORMAT_D32_SFLOAT` depth buffer, push constant MVP dispatch, and procedural reference cube.
 - [x] **Phase 7 — Touch & S-Pen CAD Camera**: Spherical Arcball camera supporting single-pointer orbit, two-pointer pinch zoom, and pan.
-- [ ] **Phase 9 — Memory Allocator & CAD Grid**: Integration of Vulkan Memory Allocator (VMA), device-local vertex/index buffers, and an infinite anti-aliased CAD reference ground plane grid.
-- [ ] **Phase 10 — Viewport UI Overlay**: Dear ImGui Vulkan backend for view gizmos, projection switches (orthographic/perspective), and touch control toolbars.
-- [ ] **Phase 11 — Geometric Modeling Kernel**: Integration of Manifold C++20 CSG library for Boolean operations, polygon meshes, and parametric solids.
+- [x] **Phase 9 — Memory Allocator & CAD Grid**: Device-local vertex/index buffers (`MeshBuffer`), XYZ triad, lit solid mesh pipeline, and CAD reference grid.
+- [x] **Phase 10 — Viewport UI Overlay**: Dear ImGui Vulkan/Android HUD overlay, camera view presets, and parametric solid primitives.
+- [x] **Phase 11 — Geometric Modeling Kernel & STL Export**: Manifold C++20 CSG Boolean kernel (Subtract/Drill Hole, Union, Intersect, Hollow Pipe), interactive parametric dimension sliders, and watertight binary STL export.
 
 ---
 

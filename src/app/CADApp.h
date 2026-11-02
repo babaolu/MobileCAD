@@ -2,9 +2,11 @@
 #include <android/native_window.h>
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "geometry/Primitives.h"
+#include "io/MeshExporter.h"
 #include "rendering/Camera.h"
 #include "rendering/MeshBuffer.h"
 #include "rendering/Pipeline.h"
@@ -21,6 +23,17 @@ enum class PrimitiveType
     Box,
     Cylinder,
     Sphere
+};
+
+struct PrimitiveParams
+{
+    float width{1.6f};
+    float height{1.2f};
+    float depth{1.6f};
+    float radius{0.6f};
+    float holeRadius{0.3f};
+    int segments{32};
+    int csgMode{0};  // 0 = Solid, 1 = Drill Hole, 2 = Union, 3 = Intersect, 4 = Hollow Pipe
 };
 
 class CADApp
@@ -40,8 +53,15 @@ class CADApp
     void onWindowResized(ANativeWindow* window, int32_t width, int32_t height);
     void onTouchEvent(int32_t action, int32_t pointerCount, float x0, float y0, float x1, float y1);
 
-    // CAD Scene controls
+    // CAD Scene & Parametric Modeling controls
     void setPrimitive(PrimitiveType type);
+    void rebuildGeometry();
+    bool exportSTL();
+    void setExportPath(const std::string& path) { m_exportPath = path; }
+    const std::string& getExportPath() const { return m_exportPath; }
+    const std::string& getExportStatus() const { return m_exportStatus; }
+    PrimitiveParams& getParams() { return m_params; }
+    const PrimitiveParams& getParams() const { return m_params; }
 
     rendering::Camera& getCamera() { return m_camera; }
     const rendering::Camera& getCamera() const { return m_camera; }
@@ -87,11 +107,19 @@ class CADApp
     // Dear ImGui resources & state
     VkDescriptorPool m_imguiDescriptorPool{VK_NULL_HANDLE};
     PrimitiveType m_currentPrimitive{PrimitiveType::Box};
+    PrimitiveParams m_params;
     bool m_showGrid{true};
     bool m_showSolid{true};
     bool m_showWireframe{false};
+    bool m_vsyncEnabled{true};
+
+    // Export state
+    std::string m_exportPath{"/data/data/com.mobilecad/files/part_export.stl"};
+    std::string m_exportStatus;
 
     // Scene geometry
+    std::vector<rendering::Vertex> m_currentVertices;
+    std::vector<uint32_t> m_currentIndices;
     std::unique_ptr<rendering::MeshBuffer> m_gridMesh;
     std::unique_ptr<rendering::MeshBuffer> m_solidMesh;
     std::unique_ptr<rendering::MeshBuffer> m_wireframeMesh;
