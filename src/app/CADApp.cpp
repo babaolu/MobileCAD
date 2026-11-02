@@ -189,7 +189,7 @@ void CADApp::initGraphicsPipeline() {
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
     rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterizer.depthBiasEnable = VK_FALSE;
 
@@ -209,6 +209,16 @@ void CADApp::initGraphicsPipeline() {
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
+    std::vector<VkDynamicState> dynamicStates = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+    };
+
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipelineInfo.stageCount = 2;
@@ -219,6 +229,7 @@ void CADApp::initGraphicsPipeline() {
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = m_pipelineLayout;
     pipelineInfo.renderPass = m_renderPass;
     pipelineInfo.subpass = 0;
@@ -305,6 +316,8 @@ void CADApp::onWindowResized(ANativeWindow* /*window*/, int32_t width, int32_t h
          (void*)m_vkContext.get(), (void*)m_swapchain.get());
     if (width <= 0 || height <= 0) return;
     if (!m_vkContext) return;
+
+    m_vkContext->setDimensions(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 
     auto device = m_vkContext->getDevice();
     vkDeviceWaitIdle(device);
@@ -450,12 +463,28 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
     renderPassInfo.renderArea.extent = m_swapchain->getExtent();
 
     VkClearValue clearColor{};
-    clearColor.color = {{0.1f, 0.1f, 0.1f, 1.0f}};
+    clearColor.color = {{0.08f, 0.15f, 0.28f, 1.0f}};
     renderPassInfo.clearValueCount = 1;
     renderPassInfo.pClearValues = &clearColor;
 
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+
+    VkExtent2D extent = m_swapchain->getExtent();
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = static_cast<float>(extent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = extent;
+    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
     vkCmdDraw(commandBuffer, kMaxVertexCount, 1, 0, 0);
     vkCmdEndRenderPass(commandBuffer);
 

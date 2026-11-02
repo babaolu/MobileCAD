@@ -1,4 +1,5 @@
 #include "rendering/Swapchain.h"
+#include <android/log.h>
 #include <stdexcept>
 #include <iostream>
 
@@ -66,6 +67,17 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
         imageCount = capabilities.maxImageCount;
     }
 
+    // Choose composite alpha
+    VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    if (capabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) {
+        compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    }
+
+    __android_log_print(ANDROID_LOG_INFO, "MobileCAD",
+        "Swapchain created: format=%d, extent=%ux%u, supportedCompositeAlpha=0x%x, chosenCompositeAlpha=0x%x",
+        m_imageFormat, m_extent.width, m_extent.height,
+        capabilities.supportedCompositeAlpha, static_cast<uint32_t>(compositeAlpha));
+
     // Create swapchain
     VkSwapchainCreateInfoKHR createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -77,7 +89,7 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
     createInfo.imageArrayLayers = 1;
     createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     createInfo.preTransform = capabilities.currentTransform;
-    createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    createInfo.compositeAlpha = compositeAlpha;
     createInfo.presentMode = chosenPresentMode;
     createInfo.clipped = VK_TRUE;
     createInfo.oldSwapchain = VK_NULL_HANDLE;
