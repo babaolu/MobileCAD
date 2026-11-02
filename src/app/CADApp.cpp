@@ -1,7 +1,9 @@
 #include "app/CADApp.h"
 #include "utils/math/Mat4.h"
 #include <array>
+#include <cmath>
 #include <stdexcept>
+#include <android/input.h>
 #include <android/log.h>
 
 #define LOG_TAG "MobileCAD"
@@ -368,6 +370,61 @@ void CADApp::onWindowResized(ANativeWindow* /*window*/, int32_t width, int32_t h
          getSwapchainExtentW(), getSwapchainExtentH());
 }
 
+void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float y0, float x1, float y1) {
+    if (action == AMOTION_EVENT_ACTION_UP || action == AMOTION_EVENT_ACTION_CANCEL) {
+        m_activePointers = 0;
+        m_lastPinchDist = 0.0f;
+        return;
+    }
+
+    if (pointerCount != m_activePointers) {
+        m_activePointers = pointerCount;
+        m_lastTouchX = x0;
+        m_lastTouchY = y0;
+        if (pointerCount >= 2) {
+            m_lastPinchDist = std::hypot(x1 - x0, y1 - y0);
+            m_lastMidX = (x0 + x1) * 0.5f;
+            m_lastMidY = (y0 + y1) * 0.5f;
+        } else {
+            m_lastPinchDist = 0.0f;
+        }
+        return;
+    }
+
+    if (action == AMOTION_EVENT_ACTION_MOVE) {
+        if (pointerCount == 1) {
+            float dx = x0 - m_lastTouchX;
+            float dy = y0 - m_lastTouchY;
+            m_camera.orbit(dx, dy);
+            m_lastTouchX = x0;
+            m_lastTouchY = y0;
+        } else if (pointerCount >= 2) {
+            float dist = std::hypot(x1 - x0, y1 - y0);
+            float midX = (x0 + x1) * 0.5f;
+            float midY = (y0 + y1) * 0.5f;
+
+            if (m_lastPinchDist > 10.0f && dist > 10.0f) {
+                m_camera.zoom(m_lastPinchDist / dist);
+                m_camera.pan(midX - m_lastMidX, midY - m_lastMidY, static_cast<float>(getSwapchainExtentH()));
+            }
+
+            m_lastPinchDist = dist;
+            m_lastMidX = midX;
+            m_lastMidY = midY;
+            m_lastTouchX = x0;
+            m_lastTouchY = y0;
+        }
+    } else if (action == AMOTION_EVENT_ACTION_DOWN || action == AMOTION_EVENT_ACTION_POINTER_DOWN) {
+        m_lastTouchX = x0;
+        m_lastTouchY = y0;
+        if (pointerCount >= 2) {
+            m_lastPinchDist = std::hypot(x1 - x0, y1 - y0);
+            m_lastMidX = (x0 + x1) * 0.5f;
+            m_lastMidY = (y0 + y1) * 0.5f;
+        }
+    }
+}
+
 bool CADApp::drawFrame() {
     if (!m_vkContext || !m_swapchain || !m_pipeline || !m_pipelineLayout || !m_renderPass)
     {
@@ -524,15 +581,7 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
     float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
-    float angle = static_cast<float>(m_drawFrameCount) * 0.015f;
-    auto proj = utils::math::Mat4f::perspective(45.0f * 3.1415926535f / 180.0f, aspect, 0.1f, 100.0f);
-    auto view = utils::math::Mat4f::lookAt(
-        utils::math::Vec3f(2.2f, 1.8f, 2.5f),
-        utils::math::Vec3f(0.0f, 0.0f, 0.0f),
-        utils::math::Vec3f(0.0f, 1.0f, 0.0f)
-    );
-    auto model = utils::math::Mat4f::rotationY(angle);
-    utils::math::Mat4f mvp = proj * view * model;
+    utils::math::Mat4f mvp = m_camera.getViewProjectionMatrix(aspect);
 
     vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(utils::math::Mat4f), &mvp);
     vkCmdDraw(commandBuffer, 36, 1, 0, 0);

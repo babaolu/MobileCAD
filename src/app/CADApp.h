@@ -5,6 +5,7 @@
 #include "rendering/VulkanContext.h"
 #include "rendering/Swapchain.h"
 #include "rendering/Pipeline.h"
+#include "rendering/Camera.h"
 
 namespace app {
 
@@ -30,6 +31,10 @@ public:
     bool drawFrame();   // returns false on device-loss → caller should exit
     void cleanup();
     void onWindowResized(ANativeWindow* window, int32_t width, int32_t height);
+    void onTouchEvent(int32_t action, int32_t pointerCount, float x0, float y0, float x1, float y1);
+
+    rendering::Camera& getCamera() { return m_camera; }
+    const rendering::Camera& getCamera() const { return m_camera; }
 
     bool isInitialized() const { return m_initialized; }
     bool isDeviceLost() const { return m_deviceLost; }
@@ -46,6 +51,15 @@ public:
 
     std::unique_ptr<rendering::VulkanContext> m_vkContext;
     std::unique_ptr<rendering::Swapchain> m_swapchain;
+    rendering::Camera m_camera;
+
+    // Touch gesture tracking
+    float m_lastTouchX{0.0f};
+    float m_lastTouchY{0.0f};
+    float m_lastPinchDist{0.0f};
+    float m_lastMidX{0.0f};
+    float m_lastMidY{0.0f};
+    int32_t m_activePointers{0};
 
     // Resources
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};

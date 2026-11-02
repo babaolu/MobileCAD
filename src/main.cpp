@@ -1,4 +1,5 @@
 #include <android_native_app_glue.h>
+#include <android/input.h>
 #include <android/log.h>
 #include <memory>
 
@@ -102,13 +103,33 @@ static void handleCmd(android_app* app, int32_t cmd)
 
 static int32_t handleInput(android_app* /*app*/, AInputEvent* event)
 {
-    if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_KEY)
+    int32_t eventType = AInputEvent_getType(event);
+    if (eventType == AINPUT_EVENT_TYPE_KEY)
     {
         if (AKeyEvent_getKeyCode(event) == AKEYCODE_BACK &&
             AKeyEvent_getAction(event) == AKEY_EVENT_ACTION_DOWN)
         {
             LOGI("Back button — exiting");
             g_running = false;
+            return 1;
+        }
+    }
+    else if (eventType == AINPUT_EVENT_TYPE_MOTION)
+    {
+        if (g_cadApp)
+        {
+            int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
+            int32_t pointerCount = static_cast<int32_t>(AMotionEvent_getPointerCount(event));
+            float x0 = AMotionEvent_getX(event, 0);
+            float y0 = AMotionEvent_getY(event, 0);
+            float x1 = 0.0f;
+            float y1 = 0.0f;
+            if (pointerCount >= 2)
+            {
+                x1 = AMotionEvent_getX(event, 1);
+                y1 = AMotionEvent_getY(event, 1);
+            }
+            g_cadApp->onTouchEvent(action, pointerCount, x0, y0, x1, y1);
             return 1;
         }
     }
