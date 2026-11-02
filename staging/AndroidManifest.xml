@@ -12,7 +12,7 @@
             android:configChanges="orientation|screenLayout|screenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize">
             <meta-data android:name="android.app.lib_name" android:value="mobilecad" />
-            <meta-data android:name="android.app.vulkanFeatures" android:value="Vulkan 1.3" />
+            <meta-data android:name="android.app.vulkanFeatures" android:value="Vulkan 1.4" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

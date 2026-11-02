@@ -152,15 +152,12 @@ void CADApp::initGraphicsPipeline() {
 
     VkPipelineShaderStageCreateInfo stages[] = {vertStageInfo, fragStageInfo};
 
-    auto bindingDescriptions = Vertex::getBindingDescriptions();
-    auto attributeDescriptions = Vertex::getAttributeDescriptions();
-
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescriptions.size());
-    vertexInputInfo.pVertexBindingDescriptions = bindingDescriptions.data();
-    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
-    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+    vertexInputInfo.vertexBindingDescriptionCount = 0;
+    vertexInputInfo.pVertexBindingDescriptions = nullptr;
+    vertexInputInfo.vertexAttributeDescriptionCount = 0;
+    vertexInputInfo.pVertexAttributeDescriptions = nullptr;
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -279,66 +276,49 @@ void CADApp::cleanup() {
     }
 
     auto device = m_vkContext->getDevice();
+    if (device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(device);
+    }
 
-    vkDestroyPipeline(device, m_pipeline, nullptr);
-    vkDestroyPipelineLayout(device, m_pipelineLayout, nullptr);
-    vkDestroyRenderPass(device, m_renderPass, nullptr);
+    if (m_pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(device, m_pipeline, nullptr);
+        m_pipeline = VK_NULL_HANDLE;
+    }
+    if (m_pipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(device, m_pipelineLayout, nullptr);
+        m_pipelineLayout = VK_NULL_HANDLE;
+    }
+    if (m_renderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(device, m_renderPass, nullptr);
+        m_renderPass = VK_NULL_HANDLE;
+    }
 
     cleanupSwapchain();
+    m_swapchain.reset();
     m_vkContext.reset();
 
     m_initialized = false;
 }
 
-void CADApp::onWindowResized(ANativeWindow* window, int32_t width, int32_t height) {
-    LOGE("onWindowResized ENTRY %dx%d vkCtx=%p swap=%p", width, height,
+void CADApp::onWindowResized(ANativeWindow* /*window*/, int32_t width, int32_t height) {
+    LOGI("onWindowResized ENTRY %dx%d vkCtx=%p swap=%p", width, height,
          (void*)m_vkContext.get(), (void*)m_swapchain.get());
-    if (width <= 0 || height <= 0) { LOGE("onWindowResized SKIP width<=0"); return; }
+    if (width <= 0 || height <= 0) return;
+    if (!m_vkContext) return;
 
-    // Step 1: destroy framebuffers (device still valid)
-    LOGE("onWindowResized step-1: cleanupSwapchain()");
+    auto device = m_vkContext->getDevice();
+    vkDeviceWaitIdle(device);
+
     cleanupSwapchain();
-
-    // Step 2: destroy swapchain *before* context, so ~Swapchain() can still reach device
-    LOGE("onWindowResized step-2: destroying old swapchain");
     m_swapchain.reset();
+    initSwapchain();
+    initFramebuffers();
 
-    // Step 3: destroy VulkanContext last (frees device, instance, …)
-    LOGE("onWindowResized step-3: resetting VulkanContext");
-    m_vkContext.reset();
-
-    // Step 4: rebuild everything
-    LOGE("onWindowResized step-4: creating new VulkanContext");
-    try
-    {
-        m_vkContext = std::make_unique<rendering::VulkanContext>(window);
-        LOGE("onWindowResized step-5: VulkanContext OK");
-
-        LOGE("onWindowResized step-6: initSwapchain");
-        initSwapchain();
-        LOGE("onWindowResized step-7: initFramebuffers");
-        initFramebuffers();
-        LOGI("onWindowResized: rebuild complete  swap=%dx%d",
-             getSwapchainExtentW(), getSwapchainExtentH());
-    }
-    catch (const std::exception& e)
-    {
-        LOGE("onWindowResized EXCEPTION: %s", e.what());
-        // Clear every PDP (power delivery) resource that may still hold handles
-        // onto the old device before m_vkContext is invalidated.
-        m_pipeline = VK_NULL_HANDLE;
-        m_pipelineLayout = VK_NULL_HANDLE;
-        m_renderPass = VK_NULL_HANDLE;
-        m_swapchainFramebuffers.clear();
-        m_swapchain.reset();
-        m_vkContext.reset();
-    }
-    LOGE("onWindowResized RETURN");
+    LOGI("onWindowResized: rebuild complete  swap=%dx%d",
+         getSwapchainExtentW(), getSwapchainExtentH());
 }
 
 bool CADApp::drawFrame() {
-    LOGE("drawFrame ENTER vkCtx=%p swap=%p pipe=%p",
-         (void*)m_vkContext.get(), (void*)m_swapchain.get(), (void*)m_pipeline);
     if (!m_vkContext || !m_swapchain || !m_pipeline || !m_pipelineLayout || !m_renderPass)
     {
         LOGE("FATAL: drawFrame #%u — null resource (vkCtx=%p swap=%p pipe=%p layout=%p rp=%p)",
@@ -347,22 +327,19 @@ bool CADApp::drawFrame() {
              (void*)m_pipelineLayout, (void*)m_renderPass);
         return false;
     }
-    LOGE("drawFrame step-1: getting device");
+
     auto device = m_vkContext->getDevice();
     uint32_t frame = m_currentFrame % m_vkContext->getMaxFrames();
 
-    LOGE("drawFrame step-2: waiting fence");
     VkFence fence = m_vkContext->getFence(frame);
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
     vkResetFences(device, 1, &fence);
 
-    LOGE("drawFrame step-3: getting semaphores/cmd buffer");
     VkSemaphore waitSem = m_vkContext->getWaitSemaphore(frame);
     VkSemaphore signalSem = m_vkContext->getSignalSemaphore(frame);
     VkCommandBuffer cmdBuf = m_vkContext->getCmdBuffer(frame);
 
-    LOGE("drawFrame step-4: vkAcquireNextImageKHR");
-    uint32_t imageIndex;
+    uint32_t imageIndex = 0;
     auto result = vkAcquireNextImageKHR(
         device,
         m_swapchain->getSwapchain(),
@@ -371,10 +348,9 @@ bool CADApp::drawFrame() {
         VK_NULL_HANDLE,
         &imageIndex
     );
-    LOGE("drawFrame step-5: acquire result=%d imageIndex=%u", result, imageIndex);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-        LOGI("swapchain out of date, recreating");
+        LOGI("swapchain out of date on acquire, recreating");
         cleanupSwapchain();
         initSwapchain();
         initFramebuffers();
@@ -385,17 +361,8 @@ bool CADApp::drawFrame() {
         return false;
     }
 
-    LOGE("drawFrame step-6: recording cmd buffer image=%u", imageIndex);
     vkResetCommandBuffer(cmdBuf, 0);
     recordCommandBuffer(cmdBuf, imageIndex);
-
-    LOGE("drawFrame step-7: submitting queue  frame=%u  queue=%p cmd=%p semWait=%p semSig=%p fence=%p",
-         m_currentFrame,
-         (void*)m_vkContext->getGraphicsQueue(),
-         (void*)cmdBuf,
-         (void*)waitSem,
-         (void*)signalSem,
-         (void*)fence);
 
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -409,30 +376,13 @@ bool CADApp::drawFrame() {
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = &signalSem;
 
-    // Direct values — avoid wide format-string truncation in logcat
-    LOGE("DBG-Q vkQ=%p cmd=%p swEx=%u",
-         (void*)m_vkContext->getGraphicsQueue(),
-         (void*)cmdBuf,
-         m_swapchain ? m_swapchain->getExtent().width : 0);
-    LOGE("DBG-Q semW=%p semS=%p fen=%p  frame=%u",
-         (void*)waitSem, (void*)signalSem, (void*)fence,
-         m_currentFrame);
-
-    // Catch every exception inside drawFrame.  Throwing past the SIGSEGV-masked
-    // region in main.cpp causes the Adreno driver crash to be silently lost:
-    //   vkQueueSubmit faults → SIGSEGV blocked → throw starts unwinding →
-    //   handleCmd catch fires → sigprocmask restores unblocked mask →
-    //   pending SIGSEGV fires inside sigaction → sigabort → ABORT_DUMP at
-    //   address 0x90 → android_main EXITING never reached.
-    // local catch prevents the throw from crossing the block/unblock boundary.
     try {
         VkResult submitResult = vkQueueSubmit(m_vkContext->getGraphicsQueue(), 1, &submitInfo, fence);
         if (submitResult == VK_ERROR_DEVICE_LOST) {
-            LOGE("drawFrame step7: vkQueueSubmit VK_ERROR_DEVICE_LOST — GPU was lost, exiting");
+            LOGE("drawFrame: vkQueueSubmit VK_ERROR_DEVICE_LOST — GPU was lost, exiting");
             m_deviceLost = true;
             return false;
         }
-        LOGE("drawFrame step7: vkQueueSubmit result=%d fence=%p", submitResult, (void*)fence);
         if (submitResult != VK_SUCCESS) {
             LOGE("FATAL: vkQueueSubmit FAILED (result=%d)", submitResult);
             m_deviceLost = true;
@@ -448,11 +398,9 @@ bool CADApp::drawFrame() {
         presentInfo.pSwapchains = swapchains;
         presentInfo.pImageIndices = &imageIndex;
 
-        LOGE("drawFrame step-8: vkQueuePresentKHR");
         result = vkQueuePresentKHR(m_vkContext->getPresentQueue(), &presentInfo);
-        LOGE("drawFrame step-9: present result=%d", result);
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-            LOGE("drawFrame step-9: swapchain out of date — recreating (image=%u)", imageIndex);
+            LOGI("swapchain out of date on present, recreating (image=%u)", imageIndex);
             cleanupSwapchain();
             initSwapchain();
             initFramebuffers();
@@ -472,6 +420,7 @@ bool CADApp::drawFrame() {
         return false;
     }
 
+    m_drawFrameCount++;
     m_currentFrame = (m_currentFrame + 1) % m_vkContext->getMaxFrames();
     return true;
 }

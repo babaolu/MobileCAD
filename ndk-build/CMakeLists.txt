@@ -92,9 +92,12 @@ target_link_libraries(mobilecad PRIVATE
 
 # Use compiler-rt and libunwind instead of libgcc, and point to NDK's clang resource libs
 target_link_options(mobilecad PRIVATE
+    "-Wl,-z,max-page-size=16384"
     "-rtlib=compiler-rt"
     "-unwindlib=libunwind"
     "-resource-dir=${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17"
     "-L${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux"
     "-L${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
+    "-L${CMAKE_SYSROOT}/usr/lib/aarch64-linux-android/34"
+    "-L${CMAKE_SYSROOT}/usr/lib/aarch64-linux-android"
 )

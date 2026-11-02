@@ -117,7 +117,7 @@ void VulkanContext::createInstance() {
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = "No Engine";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_2;
+    appInfo.apiVersion = VK_API_VERSION_1_4;
 
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -336,7 +336,7 @@ VkSemaphore VulkanContext::getSignalSemaphore(uint32_t frame) const {
 }
 
 VkFence VulkanContext::getFence(uint32_t frame) const {
-    return m_fences[frame];
+    return m_fences[frame % kMaxFrames];
 }
 
 void VulkanContext::waitIdle() const {

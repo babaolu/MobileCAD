@@ -1,6 +1,5 @@
 #include <android_native_app_glue.h>
 #include <android/log.h>
-#include <csignal>
 #include <memory>
 
 #include "app/CADApp.h"
@@ -9,15 +8,6 @@
 #define LOG_TAG "MobileCAD"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-
-// Per-frame SIGSEGV flag: set by signalHandler, tested in the event loop.
-static volatile sig_atomic_t g_cadSigSeen = 0;
-
-// Async-signal-safe: the only safe action inside a signal handler.
-// All logging happens after the handler returns (in normal control flow).
-static void signalHandler(int sig) {
-    if (sig == SIGSEGV) g_cadSigSeen = 1;
-}
 
 // Global app instance — created on APP_CMD_INIT_WINDOW, destroyed on APP_CMD_TERM_WINDOW
 static std::unique_ptr<app::CADApp> g_cadApp;
@@ -133,14 +123,6 @@ void android_main(struct android_app* state)
     state->onAppCmd     = handleCmd;
     state->onInputEvent = handleInput;
 
-    // Install SIGSEGV handler (SA_RESTART so interrupted syscalls restart smoothly).
-    // The handler only sets g_cadSigSeen — all logging happens after it returns.
-    struct sigaction sa{};
-    sa.sa_handler = signalHandler;
-    sa.sa_flags = SA_RESTART;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGSEGV, &sa, nullptr);
-
     while (g_running && !state->destroyRequested)
     {
         int ident, events;
@@ -158,22 +140,6 @@ void android_main(struct android_app* state)
 
         if (g_cadApp)
         {
-            // ── SIGSEGV crash guard ───────────────────────────────────────────────
-            // Block SIGSEGV while drawFrame runs. If the Adreno driver SIGSEGVs
-            // inside vkQueueSubmit the signal is held pending; on unmask the
-            // handler fires and sets g_cadSigSeen = 1 (checked below).
-            // Caution: if any throw escapes drawFrame while SIGSEGV is blocked,
-            // sigprocmask(SIG_UNBLOCK) happens inside a throw-unwind path and
-            // the pending signal fires during stack-unwind cleanup, which can
-            // double-fault before android_main EXITING fires.  drawFrame() now
-            // catches all exceptions internally so nothing propagates past this
-            // boundary.
-            sigset_t oldSigMask, blockSig;
-            sigemptyset(&blockSig);
-            sigaddset(&blockSig, SIGSEGV);
-            sigprocmask(SIG_BLOCK, &blockSig, &oldSigMask);
-
-            g_cadSigSeen = 0;          // clear flag before drawFrame
             if (!g_cadApp->drawFrame()) {
                 // vkQueueSubmit or vkQueuePresentKHR returned an error
                 LOGE("drawFrame: fatal error — exiting");
@@ -181,15 +147,6 @@ void android_main(struct android_app* state)
             } else {
                 g_drawCount++;
             }
-
-            // Unblock SIGSEGV; if the driver crashed the handler fires immediately
-            sigprocmask(SIG_SETMASK, &oldSigMask, nullptr);
-            if (g_cadSigSeen) {
-                LOGE("drawFrame: SIGSEGV caught — Adreno driver crashed, exiting cleanly");
-                g_cadSigSeen = 0;
-                g_running = false;
-            }
-            // ────────────────────────────────────────────────────────────────────
         }
     }
 

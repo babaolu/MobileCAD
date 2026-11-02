@@ -40,3 +40,10 @@ logcat_*.txt
 
 # APK signature artifacts
 *.idsig
+debug.keystore
+
+# Staging ephemeral contents (keep staging/AndroidManifest.xml tracked)
+staging/assets/
+staging/classes.dex
+staging/lib/
+

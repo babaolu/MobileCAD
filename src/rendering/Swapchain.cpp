@@ -112,14 +112,20 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
 }
 
 Swapchain::~Swapchain() {
+    if (!m_context) return;
     auto device = m_context->getDevice();
+    if (device == VK_NULL_HANDLE) return;
 
     for (auto imageView : m_imageViews) {
-        vkDestroyImageView(device, imageView, nullptr);
+        if (imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, imageView, nullptr);
+        }
     }
+    m_imageViews.clear();
 
     if (m_swapchain != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(device, m_swapchain, nullptr);
+        m_swapchain = VK_NULL_HANDLE;
     }
 }
 
