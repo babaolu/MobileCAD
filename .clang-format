@@ -11,7 +11,8 @@ BreakBeforeBraces: Allman
 NamespaceIndentation: None
 IndentCaseLabels: false
 SortIncludes: true
-IncludeBlocks: RegEx
+IncludeBlocks: Regroup
+
 AllowShortLoopsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: InlineOnly
 AllowShortLambdasOnASingleLine: All

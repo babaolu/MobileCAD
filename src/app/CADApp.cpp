@@ -1,38 +1,41 @@
 #include "app/CADApp.h"
-#include "utils/math/Mat4.h"
+
+#include <android/input.h>
+#include <android/log.h>
+
 #include <array>
 #include <cmath>
 #include <stdexcept>
-#include <android/input.h>
-#include <android/log.h>
+
+#include "utils/math/Mat4.h"
 
 #define LOG_TAG "MobileCAD"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-namespace app {
+namespace app
+{
 
-static const uint32_t kMaxVertexCount = 3;
-static Vertex g_vertices[kMaxVertexCount];
-static unsigned short g_indices[3];
-
-CADApp::CADApp(ANativeWindow* window) {
-    // Store initial window state
-    g_vertices[0] = {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}};
-    g_vertices[1] = {{ 0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}};
-    g_vertices[2] = {{ 0.0f,  0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}};
-    g_indices[0] = 0; g_indices[1] = 1; g_indices[2] = 2;
+CADApp::CADApp(ANativeWindow* window)
+{
+    m_camera.m_target = {0.0f, 0.75f, 0.0f};
+    m_camera.m_yaw = 0.785398f;    // 45 deg
+    m_camera.m_pitch = 0.523599f;  // 30 deg
+    m_camera.m_distance = 7.0f;
 
     init(window);
 }
 
-CADApp::~CADApp() {
+CADApp::~CADApp()
+{
     cleanup();
 }
 
-void CADApp::init(ANativeWindow* window) {
+void CADApp::init(ANativeWindow* window)
+{
     LOGI("CADApp::init: starting");
-    try {
+    try
+    {
         LOGI("Creating VulkanContext");
         m_vkContext = std::make_unique<rendering::VulkanContext>(window);
         LOGI("VulkanContext created");
@@ -57,25 +60,30 @@ void CADApp::init(ANativeWindow* window) {
         initFramebuffers();
         LOGI("Framebuffers initialized");
 
+        LOGI("Initializing scene geometry (grid, XYZ triad, solid block)");
+        initSceneGeometry();
+        LOGI("Scene geometry initialized");
+
         m_initialized = true;
         LOGI("CADApp::init: done");
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception& e)
+    {
         LOGE("CADApp::init failed: %s", e.what());
         throw;
     }
 }
 
-void CADApp::initSwapchain() {
+void CADApp::initSwapchain()
+{
     auto width = m_vkContext->getWidth();
     auto height = m_vkContext->getHeight();
     m_swapchain = std::make_unique<rendering::Swapchain>(
-        m_vkContext.get(),
-        static_cast<uint32_t>(width),
-        static_cast<uint32_t>(height)
-    );
+        m_vkContext.get(), static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 }
 
-void CADApp::initRenderPass() {
+void CADApp::initRenderPass()
+{
     auto format = m_swapchain->getImageFormat();
 
     VkAttachmentDescription colorAttachment{};
@@ -115,10 +123,13 @@ void CADApp::initRenderPass() {
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.srcStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dependency.srcAccessMask = 0;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependency.dstStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstAccessMask =
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
 
@@ -132,12 +143,14 @@ void CADApp::initRenderPass() {
     renderPassInfo.pDependencies = &dependency;
 
     auto device = m_vkContext->getDevice();
-    if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &m_renderPass) != VK_SUCCESS) {
+    if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &m_renderPass) != VK_SUCCESS)
+    {
         throw std::runtime_error("Failed to create render pass");
     }
 }
 
-void CADApp::initPipelineLayout() {
+void CADApp::initPipelineLayout()
+{
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushConstantRange.offset = 0;
@@ -151,12 +164,15 @@ void CADApp::initPipelineLayout() {
     pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
     auto device = m_vkContext->getDevice();
-    if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
+    if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &m_pipelineLayout) !=
+        VK_SUCCESS)
+    {
         throw std::runtime_error("Failed to create pipeline layout");
     }
 }
 
-void CADApp::initGraphicsPipeline() {
+void CADApp::initGraphicsPipeline()
+{
     auto device = m_vkContext->getDevice();
 
     auto vertShaderCode = rendering::Pipeline::loadShader("shaders/simple.vert.spv");
@@ -179,12 +195,16 @@ void CADApp::initGraphicsPipeline() {
 
     VkPipelineShaderStageCreateInfo stages[] = {vertStageInfo, fragStageInfo};
 
+    auto bindingDescription = Vertex::getBindingDescription();
+    auto attributeDescriptions = Vertex::getAttributeDescriptions();
+
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 0;
-    vertexInputInfo.pVertexBindingDescriptions = nullptr;
-    vertexInputInfo.vertexAttributeDescriptionCount = 0;
-    vertexInputInfo.pVertexAttributeDescriptions = nullptr;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+    vertexInputInfo.vertexAttributeDescriptionCount =
+        static_cast<uint32_t>(attributeDescriptions.size());
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -244,10 +264,8 @@ void CADApp::initGraphicsPipeline() {
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
-    std::vector<VkDynamicState> dynamicStates = {
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR
-    };
+    std::vector<VkDynamicState> dynamicStates = {VK_DYNAMIC_STATE_VIEWPORT,
+                                                 VK_DYNAMIC_STATE_SCISSOR};
 
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
@@ -271,23 +289,34 @@ void CADApp::initGraphicsPipeline() {
     pipelineInfo.subpass = 0;
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
-    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create graphics pipeline");
+    // 1. Create solid triangle pipeline (for 3D solid CAD part)
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline) !=
+        VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to create solid graphics pipeline");
+    }
+
+    // 2. Create line pipeline (for CAD reference grid and XYZ origin triad)
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                                  &m_linePipeline) != VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to create line graphics pipeline");
     }
 
     vkDestroyShaderModule(device, fragModule, nullptr);
     vkDestroyShaderModule(device, vertModule, nullptr);
 }
 
-void CADApp::initFramebuffers() {
+void CADApp::initFramebuffers()
+{
     auto swapchainImages = m_swapchain->getImages();
     m_swapchainFramebuffers.resize(swapchainImages.size());
 
-    for (size_t i = 0; i < swapchainImages.size(); ++i) {
-        VkImageView attachments[] = {
-            m_swapchain->getImageView(i),
-            m_swapchain->getDepthImageView()
-        };
+    for (size_t i = 0; i < swapchainImages.size(); ++i)
+    {
+        VkImageView attachments[] = {m_swapchain->getImageView(i),
+                                     m_swapchain->getDepthImageView()};
 
         VkFramebufferCreateInfo framebufferInfo{};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -299,46 +328,236 @@ void CADApp::initFramebuffers() {
         framebufferInfo.layers = 1;
 
         auto device = m_vkContext->getDevice();
-        if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &m_swapchainFramebuffers[i]) != VK_SUCCESS) {
+        if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &m_swapchainFramebuffers[i]) !=
+            VK_SUCCESS)
+        {
             throw std::runtime_error("Failed to create framebuffer");
         }
     }
 }
 
-void CADApp::cleanupSwapchain() {
+void CADApp::initSceneGeometry()
+{
+    auto device = m_vkContext->getDevice();
+    auto physDevice = m_vkContext->getPhysicalDevice();
+
+    // 1. Grid & XYZ Axes (m_gridMesh, LINE_LIST)
+    std::vector<Vertex> gridVertices;
+    const float gridMin = -5.0f;
+    const float gridMax = 5.0f;
+    const float step = 0.5f;
+    const float slateGray[3] = {0.32f, 0.38f, 0.48f};
+    const float red[3] = {0.95f, 0.25f, 0.25f};
+    const float green[3] = {0.25f, 0.90f, 0.35f};
+    const float blue[3] = {0.25f, 0.55f, 1.0f};
+
+    // Lines parallel to Z (varying Z at constant X)
+    for (float x = gridMin; x <= gridMax + 0.001f; x += step)
+    {
+        if (std::abs(x) < 0.001f)
+        {
+            // Negative Z: slate gray
+            gridVertices.push_back({{0.0f, 0.0f, gridMin},
+                                    {0.0f, 0.0f, 0.0f},
+                                    {slateGray[0], slateGray[1], slateGray[2]}});
+            gridVertices.push_back({{0.0f, 0.0f, 0.0f},
+                                    {0.0f, 0.0f, 0.0f},
+                                    {slateGray[0], slateGray[1], slateGray[2]}});
+            // Positive Z axis (+Z): bright CAD Blue
+            gridVertices.push_back(
+                {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {blue[0], blue[1], blue[2]}});
+            gridVertices.push_back(
+                {{0.0f, 0.0f, gridMax}, {0.0f, 0.0f, 0.0f}, {blue[0], blue[1], blue[2]}});
+        }
+        else
+        {
+            gridVertices.push_back({{x, 0.0f, gridMin},
+                                    {0.0f, 0.0f, 0.0f},
+                                    {slateGray[0], slateGray[1], slateGray[2]}});
+            gridVertices.push_back({{x, 0.0f, gridMax},
+                                    {0.0f, 0.0f, 0.0f},
+                                    {slateGray[0], slateGray[1], slateGray[2]}});
+        }
+    }
+
+    // Lines parallel to X (varying X at constant Z)
+    for (float z = gridMin; z <= gridMax + 0.001f; z += step)
+    {
+        if (std::abs(z) < 0.001f)
+        {
+            // Negative X: slate gray
+            gridVertices.push_back({{gridMin, 0.0f, 0.0f},
+                                    {0.0f, 0.0f, 0.0f},
+                                    {slateGray[0], slateGray[1], slateGray[2]}});
+            gridVertices.push_back({{0.0f, 0.0f, 0.0f},
+                                    {0.0f, 0.0f, 0.0f},
+                                    {slateGray[0], slateGray[1], slateGray[2]}});
+            // Positive X axis (+X): bright CAD Red
+            gridVertices.push_back(
+                {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {red[0], red[1], red[2]}});
+            gridVertices.push_back(
+                {{gridMax, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {red[0], red[1], red[2]}});
+        }
+        else
+        {
+            gridVertices.push_back({{gridMin, 0.0f, z},
+                                    {0.0f, 0.0f, 0.0f},
+                                    {slateGray[0], slateGray[1], slateGray[2]}});
+            gridVertices.push_back({{gridMax, 0.0f, z},
+                                    {0.0f, 0.0f, 0.0f},
+                                    {slateGray[0], slateGray[1], slateGray[2]}});
+        }
+    }
+
+    // Vertical +Y axis (0 to +2.5, bright CAD Green)
+    gridVertices.push_back(
+        {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {green[0], green[1], green[2]}});
+    gridVertices.push_back(
+        {{0.0f, 2.5f, 0.0f}, {0.0f, 0.0f, 0.0f}, {green[0], green[1], green[2]}});
+
+    m_gridMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, gridVertices);
+
+    // 2. 3D Solid CAD Part (m_solidMesh, Indexed TRIANGLE_LIST)
+    // 24-vertex / 36-index unit block sitting on Y=0 ground plane [0, 1.5]
+    std::vector<Vertex> solidVertices;
+    std::vector<uint32_t> solidIndices;
+
+    auto addQuad = [&](const float p0[3], const float p1[3], const float p2[3], const float p3[3],
+                       const float n[3], const float c[3])
+    {
+        uint32_t baseIdx = static_cast<uint32_t>(solidVertices.size());
+        solidVertices.push_back({{p0[0], p0[1], p0[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
+        solidVertices.push_back({{p1[0], p1[1], p1[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
+        solidVertices.push_back({{p2[0], p2[1], p2[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
+        solidVertices.push_back({{p3[0], p3[1], p3[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
+
+        solidIndices.push_back(baseIdx + 0);
+        solidIndices.push_back(baseIdx + 1);
+        solidIndices.push_back(baseIdx + 2);
+        solidIndices.push_back(baseIdx + 0);
+        solidIndices.push_back(baseIdx + 2);
+        solidIndices.push_back(baseIdx + 3);
+    };
+
+    const float x0 = 0.75f;
+    const float y0 = 0.0f;
+    const float y1 = 1.5f;
+    const float z0 = 0.75f;
+
+    // +Z Face (Front) - Anodized CAD Blue
+    const float pZ_0[3] = {-x0, y0, z0};
+    const float pZ_1[3] = {x0, y0, z0};
+    const float pZ_2[3] = {x0, y1, z0};
+    const float pZ_3[3] = {-x0, y1, z0};
+    const float nZ[3] = {0.0f, 0.0f, 1.0f};
+    const float cZ[3] = {0.35f, 0.65f, 0.95f};
+    addQuad(pZ_0, pZ_1, pZ_2, pZ_3, nZ, cZ);
+
+    // -Z Face (Back) - Bronze / Copper
+    const float nZb_0[3] = {x0, y0, -z0};
+    const float nZb_1[3] = {-x0, y0, -z0};
+    const float nZb_2[3] = {-x0, y1, -z0};
+    const float nZb_3[3] = {x0, y1, -z0};
+    const float nZb[3] = {0.0f, 0.0f, -1.0f};
+    const float cZb[3] = {0.85f, 0.60f, 0.30f};
+    addQuad(nZb_0, nZb_1, nZb_2, nZb_3, nZb, cZb);
+
+    // +Y Face (Top) - Polished Brass / Gold
+    const float pY_0[3] = {-x0, y1, z0};
+    const float pY_1[3] = {x0, y1, z0};
+    const float pY_2[3] = {x0, y1, -z0};
+    const float pY_3[3] = {-x0, y1, -z0};
+    const float nY[3] = {0.0f, 1.0f, 0.0f};
+    const float cY[3] = {0.92f, 0.76f, 0.35f};
+    addQuad(pY_0, pY_1, pY_2, pY_3, nY, cY);
+
+    // -Y Face (Bottom) - Cast Iron
+    const float nY_0[3] = {-x0, y0, -z0};
+    const float nY_1[3] = {x0, y0, -z0};
+    const float nY_2[3] = {x0, y0, z0};
+    const float nY_3[3] = {-x0, y0, z0};
+    const float nYb[3] = {0.0f, -1.0f, 0.0f};
+    const float cYb[3] = {0.50f, 0.52f, 0.58f};
+    addQuad(nY_0, nY_1, nY_2, nY_3, nYb, cYb);
+
+    // +X Face (Right) - CAD Aluminum / Silver
+    const float pX_0[3] = {x0, y0, z0};
+    const float pX_1[3] = {x0, y0, -z0};
+    const float pX_2[3] = {x0, y1, -z0};
+    const float pX_3[3] = {x0, y1, z0};
+    const float nX[3] = {1.0f, 0.0f, 0.0f};
+    const float cX[3] = {0.82f, 0.85f, 0.90f};
+    addQuad(pX_0, pX_1, pX_2, pX_3, nX, cX);
+
+    // -X Face (Left) - Slate Steel
+    const float nX_0[3] = {-x0, y0, -z0};
+    const float nX_1[3] = {-x0, y0, z0};
+    const float nX_2[3] = {-x0, y1, z0};
+    const float nX_3[3] = {-x0, y1, -z0};
+    const float nXb[3] = {-1.0f, 0.0f, 0.0f};
+    const float cXb[3] = {0.75f, 0.78f, 0.85f};
+    addQuad(nX_0, nX_1, nX_2, nX_3, nXb, cXb);
+
+    m_solidMesh =
+        std::make_unique<rendering::MeshBuffer>(device, physDevice, solidVertices, solidIndices);
+}
+
+void CADApp::cleanupSwapchain()
+{
     auto device = m_vkContext->getDevice();
 
-    for (auto framebuffer : m_swapchainFramebuffers) {
+    for (auto framebuffer : m_swapchainFramebuffers)
+    {
         vkDestroyFramebuffer(device, framebuffer, nullptr);
     }
     m_swapchainFramebuffers.clear();
 }
 
-void CADApp::cleanup() {
-    if (!m_initialized) return;
+void CADApp::cleanup()
+{
+    if (!m_initialized)
+        return;
 
     // If device was lost, all Vulkan handles are invalid — attempting vkDestroy* on them
     // can crash inside the driver (see tombstone crash chain in BUILD_FIXES.md §17).
     // Skip all cleanup; OS reclaims the address space on process exit.
-    if (m_deviceLost) {
+    if (m_deviceLost)
+    {
         LOGE("cleanup: device lost — skipping vkDestroy calls");
         return;
     }
 
     auto device = m_vkContext->getDevice();
-    if (device != VK_NULL_HANDLE) {
+    if (device != VK_NULL_HANDLE)
+    {
         vkDeviceWaitIdle(device);
     }
 
-    if (m_pipeline != VK_NULL_HANDLE) {
+    if (m_solidMesh)
+    {
+        m_solidMesh.reset();
+    }
+    if (m_gridMesh)
+    {
+        m_gridMesh.reset();
+    }
+    if (m_linePipeline != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device, m_linePipeline, nullptr);
+        m_linePipeline = VK_NULL_HANDLE;
+    }
+    if (m_pipeline != VK_NULL_HANDLE)
+    {
         vkDestroyPipeline(device, m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
     }
-    if (m_pipelineLayout != VK_NULL_HANDLE) {
+    if (m_pipelineLayout != VK_NULL_HANDLE)
+    {
         vkDestroyPipelineLayout(device, m_pipelineLayout, nullptr);
         m_pipelineLayout = VK_NULL_HANDLE;
     }
-    if (m_renderPass != VK_NULL_HANDLE) {
+    if (m_renderPass != VK_NULL_HANDLE)
+    {
         vkDestroyRenderPass(device, m_renderPass, nullptr);
         m_renderPass = VK_NULL_HANDLE;
     }
@@ -350,11 +569,14 @@ void CADApp::cleanup() {
     m_initialized = false;
 }
 
-void CADApp::onWindowResized(ANativeWindow* /*window*/, int32_t width, int32_t height) {
-    LOGI("onWindowResized ENTRY %dx%d vkCtx=%p swap=%p", width, height,
-         (void*)m_vkContext.get(), (void*)m_swapchain.get());
-    if (width <= 0 || height <= 0) return;
-    if (!m_vkContext) return;
+void CADApp::onWindowResized(ANativeWindow* /*window*/, int32_t width, int32_t height)
+{
+    LOGI("onWindowResized ENTRY %dx%d vkCtx=%p swap=%p", width, height, (void*)m_vkContext.get(),
+         (void*)m_swapchain.get());
+    if (width <= 0 || height <= 0)
+        return;
+    if (!m_vkContext)
+        return;
 
     m_vkContext->setDimensions(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 
@@ -366,46 +588,59 @@ void CADApp::onWindowResized(ANativeWindow* /*window*/, int32_t width, int32_t h
     initSwapchain();
     initFramebuffers();
 
-    LOGI("onWindowResized: rebuild complete  swap=%dx%d",
-         getSwapchainExtentW(), getSwapchainExtentH());
+    LOGI("onWindowResized: rebuild complete  swap=%dx%d", getSwapchainExtentW(),
+         getSwapchainExtentH());
 }
 
-void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float y0, float x1, float y1) {
-    if (action == AMOTION_EVENT_ACTION_UP || action == AMOTION_EVENT_ACTION_CANCEL) {
+void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float y0, float x1,
+                          float y1)
+{
+    if (action == AMOTION_EVENT_ACTION_UP || action == AMOTION_EVENT_ACTION_CANCEL)
+    {
         m_activePointers = 0;
         m_lastPinchDist = 0.0f;
         return;
     }
 
-    if (pointerCount != m_activePointers) {
+    if (pointerCount != m_activePointers)
+    {
         m_activePointers = pointerCount;
         m_lastTouchX = x0;
         m_lastTouchY = y0;
-        if (pointerCount >= 2) {
+        if (pointerCount >= 2)
+        {
             m_lastPinchDist = std::hypot(x1 - x0, y1 - y0);
             m_lastMidX = (x0 + x1) * 0.5f;
             m_lastMidY = (y0 + y1) * 0.5f;
-        } else {
+        }
+        else
+        {
             m_lastPinchDist = 0.0f;
         }
         return;
     }
 
-    if (action == AMOTION_EVENT_ACTION_MOVE) {
-        if (pointerCount == 1) {
+    if (action == AMOTION_EVENT_ACTION_MOVE)
+    {
+        if (pointerCount == 1)
+        {
             float dx = x0 - m_lastTouchX;
             float dy = y0 - m_lastTouchY;
             m_camera.orbit(dx, dy);
             m_lastTouchX = x0;
             m_lastTouchY = y0;
-        } else if (pointerCount >= 2) {
+        }
+        else if (pointerCount >= 2)
+        {
             float dist = std::hypot(x1 - x0, y1 - y0);
             float midX = (x0 + x1) * 0.5f;
             float midY = (y0 + y1) * 0.5f;
 
-            if (m_lastPinchDist > 10.0f && dist > 10.0f) {
+            if (m_lastPinchDist > 10.0f && dist > 10.0f)
+            {
                 m_camera.zoom(m_lastPinchDist / dist);
-                m_camera.pan(midX - m_lastMidX, midY - m_lastMidY, static_cast<float>(getSwapchainExtentH()));
+                m_camera.pan(midX - m_lastMidX, midY - m_lastMidY,
+                             static_cast<float>(getSwapchainExtentH()));
             }
 
             m_lastPinchDist = dist;
@@ -414,10 +649,13 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
             m_lastTouchX = x0;
             m_lastTouchY = y0;
         }
-    } else if (action == AMOTION_EVENT_ACTION_DOWN || action == AMOTION_EVENT_ACTION_POINTER_DOWN) {
+    }
+    else if (action == AMOTION_EVENT_ACTION_DOWN || action == AMOTION_EVENT_ACTION_POINTER_DOWN)
+    {
         m_lastTouchX = x0;
         m_lastTouchY = y0;
-        if (pointerCount >= 2) {
+        if (pointerCount >= 2)
+        {
             m_lastPinchDist = std::hypot(x1 - x0, y1 - y0);
             m_lastMidX = (x0 + x1) * 0.5f;
             m_lastMidY = (y0 + y1) * 0.5f;
@@ -425,13 +663,16 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
     }
 }
 
-bool CADApp::drawFrame() {
-    if (!m_vkContext || !m_swapchain || !m_pipeline || !m_pipelineLayout || !m_renderPass)
+bool CADApp::drawFrame()
+{
+    if (!m_vkContext || !m_swapchain || !m_pipeline || !m_linePipeline || !m_pipelineLayout ||
+        !m_renderPass)
     {
-        LOGE("FATAL: drawFrame #%u — null resource (vkCtx=%p swap=%p pipe=%p layout=%p rp=%p)",
-             m_drawFrameCount + 1,
-             (void*)m_vkContext.get(), (void*)m_swapchain.get(), (void*)m_pipeline,
-             (void*)m_pipelineLayout, (void*)m_renderPass);
+        LOGE(
+            "FATAL: drawFrame #%u — null resource (vkCtx=%p swap=%p pipe=%p linePipe=%p layout=%p "
+            "rp=%p)",
+            m_drawFrameCount + 1, (void*)m_vkContext.get(), (void*)m_swapchain.get(),
+            (void*)m_pipeline, (void*)m_linePipeline, (void*)m_pipelineLayout, (void*)m_renderPass);
         return false;
     }
 
@@ -447,22 +688,19 @@ bool CADApp::drawFrame() {
     VkCommandBuffer cmdBuf = m_vkContext->getCmdBuffer(frame);
 
     uint32_t imageIndex = 0;
-    auto result = vkAcquireNextImageKHR(
-        device,
-        m_swapchain->getSwapchain(),
-        UINT64_MAX,
-        waitSem,
-        VK_NULL_HANDLE,
-        &imageIndex
-    );
+    auto result = vkAcquireNextImageKHR(device, m_swapchain->getSwapchain(), UINT64_MAX, waitSem,
+                                        VK_NULL_HANDLE, &imageIndex);
 
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+    {
         LOGI("swapchain out of date on acquire, recreating");
         cleanupSwapchain();
         initSwapchain();
         initFramebuffers();
-        return true;   // swapchain recreated; caller will continue on next frame
-    } else if (result != VK_SUCCESS) {
+        return true;  // swapchain recreated; caller will continue on next frame
+    }
+    else if (result != VK_SUCCESS)
+    {
         LOGE("vkAcquireNextImageKHR failed: %d", result);
         m_deviceLost = true;
         return false;
@@ -483,14 +721,18 @@ bool CADApp::drawFrame() {
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = &signalSem;
 
-    try {
-        VkResult submitResult = vkQueueSubmit(m_vkContext->getGraphicsQueue(), 1, &submitInfo, fence);
-        if (submitResult == VK_ERROR_DEVICE_LOST) {
+    try
+    {
+        VkResult submitResult =
+            vkQueueSubmit(m_vkContext->getGraphicsQueue(), 1, &submitInfo, fence);
+        if (submitResult == VK_ERROR_DEVICE_LOST)
+        {
             LOGE("drawFrame: vkQueueSubmit VK_ERROR_DEVICE_LOST — GPU was lost, exiting");
             m_deviceLost = true;
             return false;
         }
-        if (submitResult != VK_SUCCESS) {
+        if (submitResult != VK_SUCCESS)
+        {
             LOGE("FATAL: vkQueueSubmit FAILED (result=%d)", submitResult);
             m_deviceLost = true;
             return false;
@@ -506,23 +748,28 @@ bool CADApp::drawFrame() {
         presentInfo.pImageIndices = &imageIndex;
 
         result = vkQueuePresentKHR(m_vkContext->getPresentQueue(), &presentInfo);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+        {
             LOGI("swapchain out of date on present, recreating (image=%u)", imageIndex);
             cleanupSwapchain();
             initSwapchain();
             initFramebuffers();
-            return true;   // caller continues to next drawFrame
-        } else if (result != VK_SUCCESS) {
+            return true;  // caller continues to next drawFrame
+        }
+        else if (result != VK_SUCCESS)
+        {
             LOGE("vkQueuePresentKHR failed: %d", result);
             m_deviceLost = true;
             return false;
         }
     }
-    catch (const std::exception& e) {
+    catch (const std::exception& e)
+    {
         LOGE("EXCEPTION in drawFrame: %s", e.what());
         return false;
     }
-    catch (...) {
+    catch (...)
+    {
         LOGE("UNKNOWN EXCEPTION in drawFrame");
         return false;
     }
@@ -532,11 +779,17 @@ bool CADApp::drawFrame() {
     return true;
 }
 
-void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
-    if (!m_renderPass || !m_swapchainFramebuffers[imageIndex] || !m_swapchain || !m_pipeline || !m_pipelineLayout) {
-        LOGE("recordCommandBuffer: null resource — rp=%p fb=%p swap=%p pipe=%p layout=%p",
-             (void*)m_renderPass,   (void*)m_swapchainFramebuffers[imageIndex],
-             (void*)m_swapchain.get(), (void*)m_pipeline, (void*)m_pipelineLayout);
+void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
+{
+    if (!m_renderPass || !m_swapchainFramebuffers[imageIndex] || !m_swapchain || !m_pipeline ||
+        !m_linePipeline || !m_pipelineLayout)
+    {
+        LOGE(
+            "recordCommandBuffer: null resource — rp=%p fb=%p swap=%p pipe=%p linePipe=%p "
+            "layout=%p",
+            (void*)m_renderPass, (void*)m_swapchainFramebuffers[imageIndex],
+            (void*)m_swapchain.get(), (void*)m_pipeline, (void*)m_linePipeline,
+            (void*)m_pipelineLayout);
         throw std::runtime_error("recordCommandBuffer: null pipeline resource");
     }
 
@@ -545,7 +798,8 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
     beginInfo.flags = 0;
     beginInfo.pInheritanceInfo = nullptr;
 
-    if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+    if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS)
+    {
         throw std::runtime_error("Failed to begin recording command buffer");
     }
 
@@ -563,7 +817,6 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
     renderPassInfo.pClearValues = clearValues.data();
 
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
 
     VkExtent2D extent = m_swapchain->getExtent();
     VkViewport viewport{};
@@ -583,38 +836,48 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
     float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
     utils::math::Mat4f mvp = m_camera.getViewProjectionMatrix(aspect);
 
-    vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(utils::math::Mat4f), &mvp);
-    vkCmdDraw(commandBuffer, 36, 1, 0, 0);
+    // 1. Draw CAD Reference Grid and XYZ Origin Triad (LINE_LIST)
+    if (m_gridMesh && m_gridMesh->getVertexCount() > 0)
+    {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_linePipeline);
+        VkBuffer vertexBuffers[] = {m_gridMesh->getVertexBuffer()};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                           sizeof(utils::math::Mat4f), &mvp);
+        vkCmdDraw(commandBuffer, m_gridMesh->getVertexCount(), 1, 0, 0);
+    }
+
+    // 2. Draw 3D Solid CAD Part (TRIANGLE_LIST)
+    if (m_solidMesh && m_solidMesh->getVertexCount() > 0)
+    {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+        VkBuffer vertexBuffers[] = {m_solidMesh->getVertexBuffer()};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+
+        if (m_solidMesh->hasIndices())
+        {
+            vkCmdBindIndexBuffer(commandBuffer, m_solidMesh->getIndexBuffer(), 0,
+                                 VK_INDEX_TYPE_UINT32);
+            vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                               sizeof(utils::math::Mat4f), &mvp);
+            vkCmdDrawIndexed(commandBuffer, m_solidMesh->getIndexCount(), 1, 0, 0, 0);
+        }
+        else
+        {
+            vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                               sizeof(utils::math::Mat4f), &mvp);
+            vkCmdDraw(commandBuffer, m_solidMesh->getVertexCount(), 1, 0, 0);
+        }
+    }
+
     vkCmdEndRenderPass(commandBuffer);
 
-    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
+    {
         throw std::runtime_error("Failed to record command buffer");
     }
 }
 
-// Vertex helper methods
-std::vector<VkVertexInputBindingDescription> Vertex::getBindingDescriptions() {
-    VkVertexInputBindingDescription bindingDescription{};
-    bindingDescription.binding = 0;
-    bindingDescription.stride = sizeof(Vertex);
-    bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    return {bindingDescription};
-}
-
-std::vector<VkVertexInputAttributeDescription> Vertex::getAttributeDescriptions() {
-    std::vector<VkVertexInputAttributeDescription> attributes(2);
-
-    attributes[0].binding = 0;
-    attributes[0].location = 0;
-    attributes[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributes[0].offset = offsetof(Vertex, position);
-
-    attributes[1].binding = 0;
-    attributes[1].location = 1;
-    attributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributes[1].offset = offsetof(Vertex, color);
-
-    return attributes;
-}
-
-} // namespace app
+}  // namespace app

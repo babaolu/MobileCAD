@@ -66,7 +66,9 @@ set(SOURCES
     ../src/rendering/VulkanContext.cpp
     ../src/rendering/Swapchain.cpp
     ../src/rendering/Pipeline.cpp
+    ../src/rendering/MeshBuffer.cpp
 )
+
 
 add_library(mobilecad SHARED ${SOURCES})
 

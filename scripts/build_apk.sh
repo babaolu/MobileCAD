@@ -26,15 +26,14 @@ echo "Project Root: ${ROOT_DIR}"
 echo "Android JAR:  ${ANDROID_JAR}"
 echo "Android NDK:  ${ANDROID_NDK_HOME}"
 
-# 2. Compile Shaders (if slangc available)
-if command -v slangc &>/dev/null; then
-    echo "--- Compiling shaders ---"
-    "${SCRIPT_DIR}/compile_shaders.sh"
-    mkdir -p assets/shaders
-    cp shaders/compiled/*.spv assets/shaders/ 2>/dev/null || true
+# 2. Compile Shaders
+echo "--- Compiling shaders ---"
+if "${SCRIPT_DIR}/compile_shaders.sh"; then
+    echo "--- Shaders compiled successfully ---"
 else
-    echo "--- Skipping shader compile (slangc not found, using precompiled assets/shaders) ---"
+    echo "--- Warning: Shader compilation failed or skipped, using precompiled assets/shaders ---"
 fi
+
 
 # 3. Native C++ Build (16 KB aligned)
 echo "--- Building libmobilecad.so (Ninja) ---"
