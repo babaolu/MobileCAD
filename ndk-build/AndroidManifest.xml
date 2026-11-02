@@ -6,6 +6,7 @@
     <uses-feature android:name="android.hardware.vulkan" android:required="true" />
     <application android:label="MobileCAD" android:hasCode="true"
         android:extractNativeLibs="true" android:debuggable="true"
+        android:enableOnBackInvokedCallback="false"
         tools:replace="android:extractNativeLibs">
         <activity android:name="android.app.NativeActivity" android:exported="true"
             android:launchMode="singleInstance" android:screenOrientation="portrait"

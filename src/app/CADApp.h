@@ -1,6 +1,7 @@
 #pragma once
 #include <android/native_window.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -63,6 +64,8 @@ class CADApp
     PrimitiveParams& getParams() { return m_params; }
     const PrimitiveParams& getParams() const { return m_params; }
 
+    void setExitCallback(std::function<void()> cb) { m_exitCallback = std::move(cb); }
+
     rendering::Camera& getCamera() { return m_camera; }
     const rendering::Camera& getCamera() const { return m_camera; }
 
@@ -116,6 +119,9 @@ class CADApp
     // Export state
     std::string m_exportPath{"/data/data/com.mobilecad/files/part_export.stl"};
     std::string m_exportStatus;
+
+    // Lifecycle exit callback
+    std::function<void()> m_exitCallback;
 
     // Scene geometry
     std::vector<rendering::Vertex> m_currentVertices;

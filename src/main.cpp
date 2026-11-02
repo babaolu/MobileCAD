@@ -15,10 +15,20 @@
 
 // Global app instance — created on APP_CMD_INIT_WINDOW, destroyed on APP_CMD_TERM_WINDOW
 static std::unique_ptr<app::CADApp> g_cadApp;
-static bool g_running = true;
+static bool g_exitRequested = false;
 
 // Track drawFrame call count for diagnostic logging
 static uint32_t g_drawCount = 0;
+
+static void requestAppExit(android_app* app)
+{
+    if (!g_exitRequested && app && app->activity)
+    {
+        LOGI("Requesting NativeActivity finish...");
+        g_exitRequested = true;
+        ANativeActivity_finish(app->activity);
+    }
+}
 
 static void handleCmd(android_app* app, int32_t cmd)
 {
@@ -40,7 +50,9 @@ static void handleCmd(android_app* app, int32_t cmd)
 
         try
         {
+            g_exitRequested = false;
             g_cadApp = std::make_unique<app::CADApp>(app->window);
+            g_cadApp->setExitCallback([app]() { requestAppExit(app); });
             if (app->activity && app->activity->internalDataPath)
             {
                 std::string stlPath =
@@ -53,7 +65,7 @@ static void handleCmd(android_app* app, int32_t cmd)
         catch (const std::exception& e)
         {
             LOGE("Failed to create CADApp: %s", e.what());
-            g_running = false;
+            requestAppExit(app);
         }
         break;
     }
@@ -95,7 +107,6 @@ static void handleCmd(android_app* app, int32_t cmd)
     {
         LOGI("APP_CMD_DESTROY — shutting down");
         g_cadApp.reset();
-        g_running = false;
         break;
     }
 
@@ -104,25 +115,28 @@ static void handleCmd(android_app* app, int32_t cmd)
     }
 }
 
-static int32_t handleInput(android_app* /*app*/, AInputEvent* event)
+static int32_t handleInput(android_app* app, AInputEvent* event)
 {
+    int32_t eventType = AInputEvent_getType(event);
+    if (eventType == AINPUT_EVENT_TYPE_KEY)
+    {
+        if (AKeyEvent_getKeyCode(event) == AKEYCODE_BACK)
+        {
+            if (AKeyEvent_getAction(event) == AKEY_EVENT_ACTION_UP)
+            {
+                LOGI("Back button pressed — calling requestAppExit");
+                requestAppExit(app);
+            }
+            return 1;
+        }
+    }
+
     if (ImGui::GetCurrentContext() != nullptr)
     {
         ImGui_ImplAndroid_HandleInputEvent(event);
     }
 
-    int32_t eventType = AInputEvent_getType(event);
-    if (eventType == AINPUT_EVENT_TYPE_KEY)
-    {
-        if (AKeyEvent_getKeyCode(event) == AKEYCODE_BACK &&
-            AKeyEvent_getAction(event) == AKEY_EVENT_ACTION_DOWN)
-        {
-            LOGI("Back button — exiting");
-            g_running = false;
-            return 1;
-        }
-    }
-    else if (eventType == AINPUT_EVENT_TYPE_MOTION)
+    if (eventType == AINPUT_EVENT_TYPE_MOTION)
     {
         if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureMouse)
         {
@@ -156,13 +170,14 @@ extern "C" __attribute__((visibility("default"))) void android_main(struct andro
     state->onAppCmd = handleCmd;
     state->onInputEvent = handleInput;
 
-    while (g_running && !state->destroyRequested)
+    while (!state->destroyRequested)
     {
         int ident, events;
         android_poll_source* source = nullptr;
 
-        // Block before first frame (no window yet), poll at 0 ms after init
-        int timeoutMs = g_cadApp ? 0 : -1;
+        // Block before first frame (no window yet) or after exit requested; poll at 0 ms while
+        // rendering
+        int timeoutMs = (g_cadApp && !g_exitRequested) ? 0 : -1;
         ident = ALooper_pollOnce(timeoutMs, nullptr, &events, reinterpret_cast<void**>(&source));
 
         if (ident >= 0 && source)
@@ -170,13 +185,13 @@ extern "C" __attribute__((visibility("default"))) void android_main(struct andro
             source->process(state, source);
         }
 
-        if (g_cadApp)
+        if (g_cadApp && !g_exitRequested)
         {
             if (!g_cadApp->drawFrame())
             {
                 // vkQueueSubmit or vkQueuePresentKHR returned an error
-                LOGE("drawFrame: fatal error — exiting");
-                g_running = false;
+                LOGE("drawFrame: fatal error — requesting app exit");
+                requestAppExit(state);
             }
             else
             {

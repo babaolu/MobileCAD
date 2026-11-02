@@ -723,6 +723,39 @@ void CADApp::renderImGui()
             }
             ImGui::TextDisabled("File: part_export.stl");
         }
+
+        // 6. Graceful Exit
+        ImGui::Separator();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.18f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.88f, 0.25f, 0.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.12f, 0.12f, 1.0f));
+        if (ImGui::Button("Exit App", ImVec2(-1.0f, 0.0f)))
+        {
+            ImGui::OpenPopup("Confirm Exit");
+        }
+        ImGui::PopStyleColor(3);
+
+        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+        ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (ImGui::BeginPopupModal("Confirm Exit", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("Exit MobileCAD and return to Android?");
+            ImGui::Separator();
+            if (ImGui::Button("Yes, Exit", ImVec2(180, 0)))
+            {
+                ImGui::CloseCurrentPopup();
+                if (m_exitCallback)
+                {
+                    m_exitCallback();
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(180, 0)))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
     ImGui::End();
 }
