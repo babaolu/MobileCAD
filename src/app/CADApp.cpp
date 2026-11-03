@@ -1088,15 +1088,15 @@ bool CADApp::drawNumericControl(const char* label, float* value, float step, flo
     bool changed = false;
     ImGui::PushID(label);
 
-    float availW = ImGui::GetContentRegionAvail().x;
-    float btnW = 32.0f;
-    float valW = 72.0f;
-    float controlW = btnW * 2.0f + valW + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+    float btnW = 34.0f;
+    float valW = 76.0f;
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float controlW = btnW * 2.0f + valW + spacing * 2.0f;
 
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
 
-    float targetX = availW - controlW + ImGui::GetStyle().ItemSpacing.x;
+    float targetX = ImGui::GetWindowContentRegionMax().x - controlW;
     if (ImGui::GetCursorPosX() < targetX)
     {
         ImGui::SameLine(targetX);
@@ -1289,8 +1289,8 @@ void CADApp::renderImGui()
     {
         float maxH = ImGui::GetIO().DisplaySize.y * 0.72f;
         ImGui::SetNextWindowPos(ImVec2(24.0f, 24.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(340.0f, 0.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 120.0f), ImVec2(380.0f, maxH));
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(480.0f, 150.0f), ImVec2(600.0f, maxH));
         ImGui::SetNextWindowBgAlpha(0.90f);
         if (ImGui::Begin("MobileCAD Studio", &m_showMenu))
         {
@@ -1317,7 +1317,12 @@ void CADApp::renderImGui()
             }
 
             ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Vulkan 1.4 Native CAD");
-            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 48.0f);
+            ImGui::SameLine();
+            float hideTargetX = ImGui::GetWindowContentRegionMax().x - 84.0f;
+            if (ImGui::GetCursorPosX() < hideTargetX)
+            {
+                ImGui::SameLine(hideTargetX);
+            }
             if (ImGui::SmallButton("Hide"))
             {
                 m_showMenu = false;
@@ -1328,31 +1333,37 @@ void CADApp::renderImGui()
                         totalVerts);
             ImGui::Separator();
 
-            // 2. View Presets
+            // 2. View Presets (4 clean side-by-side buttons + Reset)
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Camera Presets:");
-            if (ImGui::Button("Iso"))
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Reset"))
+            {
+                m_camera.resetView();
+            }
+
+            float availW = ImGui::GetContentRegionAvail().x;
+            float spacing = ImGui::GetStyle().ItemSpacing.x;
+            float presetBtnW = (availW - spacing * 3.0f) * 0.25f;
+
+            if (ImGui::Button("Iso", ImVec2(presetBtnW, 0.0f)))
             {
                 m_camera.setViewIso();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Top"))
+            if (ImGui::Button("Top", ImVec2(presetBtnW, 0.0f)))
             {
                 m_camera.setViewTop();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Front"))
+            if (ImGui::Button("Front", ImVec2(presetBtnW, 0.0f)))
             {
                 m_camera.setViewFront();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Right"))
+            if (ImGui::Button("Right", ImVec2(presetBtnW, 0.0f)))
             {
                 m_camera.setViewRight();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Reset"))
-            {
-                m_camera.resetView();
             }
 
             // 3. Scene Assembly Section
