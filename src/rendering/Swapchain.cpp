@@ -1,12 +1,16 @@
 #include "rendering/Swapchain.h"
+
 #include <android/log.h>
-#include <stdexcept>
+
 #include <iostream>
+#include <stdexcept>
 
-namespace rendering {
+namespace rendering
+{
 
-Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
-    : m_context(context) {
+Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height, bool vsync)
+    : m_context(context), m_vsync(vsync)
+{
     auto surface = m_context->getSurface();
     auto physicalDevice = m_context->getPhysicalDevice();
     auto device = m_context->getDevice();
@@ -23,13 +27,19 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
 
     // Choose format
     VkSurfaceFormatKHR chosenFormat;
-    if (formats.size() == 1 && formats[0].format == VK_FORMAT_UNDEFINED) {
+    if (formats.size() == 1 && formats[0].format == VK_FORMAT_UNDEFINED)
+    {
         chosenFormat.format = VK_FORMAT_B8G8R8A8_SRGB;
         chosenFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    } else {
+    }
+    else
+    {
         chosenFormat = formats[0];
-        for (const auto& format : formats) {
-            if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+        for (const auto& format : formats)
+        {
+            if (format.format == VK_FORMAT_B8G8R8A8_SRGB &&
+                format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+            {
                 chosenFormat = format;
                 break;
             }
@@ -41,42 +51,77 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
     uint32_t presentModeCount;
     vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, nullptr);
     std::vector<VkPresentModeKHR> presentModes(presentModeCount);
-    vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes.data());
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount,
+                                              presentModes.data());
 
     VkPresentModeKHR chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
-    for (const auto& mode : presentModes) {
-        if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
-            chosenPresentMode = mode;
-            break;
+    const char* presentModeStr = "FIFO_KHR (120Hz VSync)";
+
+    if (!vsync)
+    {
+        bool foundMailbox = false;
+        bool foundImmediate = false;
+        for (const auto& mode : presentModes)
+        {
+            if (mode == VK_PRESENT_MODE_MAILBOX_KHR)
+            {
+                foundMailbox = true;
+            }
+            else if (mode == VK_PRESENT_MODE_IMMEDIATE_KHR)
+            {
+                foundImmediate = true;
+            }
+        }
+        if (foundMailbox)
+        {
+            chosenPresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+            presentModeStr = "MAILBOX_KHR (Uncapped)";
+        }
+        else if (foundImmediate)
+        {
+            chosenPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+            presentModeStr = "IMMEDIATE_KHR (Uncapped)";
+        }
+        else
+        {
+            chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+            presentModeStr = "FIFO_KHR (Fallback)";
         }
     }
+    m_presentMode = chosenPresentMode;
 
     // Choose extent
-    VkExtent2D actualExtent = {
-        std::max(capabilities.currentExtent.width, std::min(width, capabilities.maxImageExtent.width)),
-        std::max(capabilities.currentExtent.height, std::min(height, capabilities.maxImageExtent.height))
-    };
-    if (capabilities.currentExtent.width != UINT32_MAX) {
+    VkExtent2D actualExtent = {std::max(capabilities.currentExtent.width,
+                                        std::min(width, capabilities.maxImageExtent.width)),
+                               std::max(capabilities.currentExtent.height,
+                                        std::min(height, capabilities.maxImageExtent.height))};
+    if (capabilities.currentExtent.width != UINT32_MAX)
+    {
         actualExtent = capabilities.currentExtent;
     }
     m_extent = actualExtent;
 
     // Choose image count
     uint32_t imageCount = capabilities.minImageCount + 1;
-    if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount) {
+    if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount)
+    {
         imageCount = capabilities.maxImageCount;
     }
 
     // Choose composite alpha
     VkCompositeAlphaFlagBitsKHR compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
-    if (capabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) {
+    if (capabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+    {
         compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     }
 
     __android_log_print(ANDROID_LOG_INFO, "MobileCAD",
-        "Swapchain created: format=%d, extent=%ux%u, supportedCompositeAlpha=0x%x, chosenCompositeAlpha=0x%x",
-        m_imageFormat, m_extent.width, m_extent.height,
-        capabilities.supportedCompositeAlpha, static_cast<uint32_t>(compositeAlpha));
+                        "Swapchain created: format=%d, extent=%ux%u, presentMode=%s (0x%x), "
+                        "supportedCompositeAlpha=0x%x, chosenCompositeAlpha=0x%x",
+                        m_imageFormat, m_extent.width, m_extent.height, presentModeStr,
+                        static_cast<uint32_t>(chosenPresentMode),
+                        capabilities.supportedCompositeAlpha,
+                        static_cast<uint32_t>(compositeAlpha));
 
     // Create swapchain
     VkSwapchainCreateInfoKHR createInfo{};
@@ -94,7 +139,8 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
     createInfo.clipped = VK_TRUE;
     createInfo.oldSwapchain = VK_NULL_HANDLE;
 
-    if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &m_swapchain) != VK_SUCCESS) {
+    if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &m_swapchain) != VK_SUCCESS)
+    {
         throw std::runtime_error("Failed to create swapchain");
     }
 
@@ -105,7 +151,8 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
 
     // Create image views
     m_imageViews.resize(m_images.size());
-    for (size_t i = 0; i < m_images.size(); ++i) {
+    for (size_t i = 0; i < m_images.size(); ++i)
+    {
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = m_images[i];
@@ -117,7 +164,8 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
         viewInfo.subresourceRange.baseArrayLayer = 0;
         viewInfo.subresourceRange.layerCount = 1;
 
-        if (vkCreateImageView(device, &viewInfo, nullptr, &m_imageViews[i]) != VK_SUCCESS) {
+        if (vkCreateImageView(device, &viewInfo, nullptr, &m_imageViews[i]) != VK_SUCCESS)
+        {
             throw std::runtime_error("Failed to create image view");
         }
     }
@@ -138,7 +186,8 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
     depthImageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     depthImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    if (vkCreateImage(device, &depthImageInfo, nullptr, &m_depthImage) != VK_SUCCESS) {
+    if (vkCreateImage(device, &depthImageInfo, nullptr, &m_depthImage) != VK_SUCCESS)
+    {
         throw std::runtime_error("Failed to create depth image!");
     }
 
@@ -149,15 +198,20 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
     vkGetImageMemoryRequirements(device, m_depthImage, &memRequirements);
 
     uint32_t memoryTypeIndex = UINT32_MAX;
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
+    {
         if ((memRequirements.memoryTypeBits & (1 << i)) &&
-            (memProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) == VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
+            (memProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ==
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+        {
             memoryTypeIndex = i;
             break;
         }
     }
-    if (memoryTypeIndex == UINT32_MAX) {
-        throw std::runtime_error("Failed to find suitable device-local memory type for depth buffer!");
+    if (memoryTypeIndex == UINT32_MAX)
+    {
+        throw std::runtime_error(
+            "Failed to find suitable device-local memory type for depth buffer!");
     }
 
     VkMemoryAllocateInfo allocInfo{};
@@ -165,7 +219,8 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
     allocInfo.allocationSize = memRequirements.size;
     allocInfo.memoryTypeIndex = memoryTypeIndex;
 
-    if (vkAllocateMemory(device, &allocInfo, nullptr, &m_depthImageMemory) != VK_SUCCESS) {
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &m_depthImageMemory) != VK_SUCCESS)
+    {
         throw std::runtime_error("Failed to allocate depth image memory!");
     }
 
@@ -182,40 +237,50 @@ Swapchain::Swapchain(VulkanContext* context, uint32_t width, uint32_t height)
     depthViewInfo.subresourceRange.baseArrayLayer = 0;
     depthViewInfo.subresourceRange.layerCount = 1;
 
-    if (vkCreateImageView(device, &depthViewInfo, nullptr, &m_depthImageView) != VK_SUCCESS) {
+    if (vkCreateImageView(device, &depthViewInfo, nullptr, &m_depthImageView) != VK_SUCCESS)
+    {
         throw std::runtime_error("Failed to create depth image view!");
     }
 }
 
-Swapchain::~Swapchain() {
-    if (!m_context) return;
+Swapchain::~Swapchain()
+{
+    if (!m_context)
+        return;
     auto device = m_context->getDevice();
-    if (device == VK_NULL_HANDLE) return;
+    if (device == VK_NULL_HANDLE)
+        return;
 
-    if (m_depthImageView != VK_NULL_HANDLE) {
+    if (m_depthImageView != VK_NULL_HANDLE)
+    {
         vkDestroyImageView(device, m_depthImageView, nullptr);
         m_depthImageView = VK_NULL_HANDLE;
     }
-    if (m_depthImage != VK_NULL_HANDLE) {
+    if (m_depthImage != VK_NULL_HANDLE)
+    {
         vkDestroyImage(device, m_depthImage, nullptr);
         m_depthImage = VK_NULL_HANDLE;
     }
-    if (m_depthImageMemory != VK_NULL_HANDLE) {
+    if (m_depthImageMemory != VK_NULL_HANDLE)
+    {
         vkFreeMemory(device, m_depthImageMemory, nullptr);
         m_depthImageMemory = VK_NULL_HANDLE;
     }
 
-    for (auto imageView : m_imageViews) {
-        if (imageView != VK_NULL_HANDLE) {
+    for (auto imageView : m_imageViews)
+    {
+        if (imageView != VK_NULL_HANDLE)
+        {
             vkDestroyImageView(device, imageView, nullptr);
         }
     }
     m_imageViews.clear();
 
-    if (m_swapchain != VK_NULL_HANDLE) {
+    if (m_swapchain != VK_NULL_HANDLE)
+    {
         vkDestroySwapchainKHR(device, m_swapchain, nullptr);
         m_swapchain = VK_NULL_HANDLE;
     }
 }
 
-} // namespace rendering
+}  // namespace rendering

@@ -66,6 +66,16 @@ class CADApp
 
     void setExitCallback(std::function<void()> cb) { m_exitCallback = std::move(cb); }
 
+    bool isVsyncEnabled() const { return m_vsync; }
+    void setVsync(bool enabled)
+    {
+        if (m_vsync != enabled)
+        {
+            m_vsync = enabled;
+            m_vsyncChanged = true;
+        }
+    }
+
     rendering::Camera& getCamera() { return m_camera; }
     const rendering::Camera& getCamera() const { return m_camera; }
 
@@ -114,7 +124,8 @@ class CADApp
     bool m_showGrid{true};
     bool m_showSolid{true};
     bool m_showWireframe{false};
-    bool m_vsyncEnabled{true};
+    bool m_vsync{true};
+    bool m_vsyncChanged{false};
 
     // Export state
     std::string m_exportPath{"/data/data/com.mobilecad/files/part_export.stl"};

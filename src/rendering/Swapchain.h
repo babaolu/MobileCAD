@@ -1,13 +1,16 @@
 #pragma once
-#include <vulkan/vulkan.hpp>
 #include <memory>
+#include <vulkan/vulkan.hpp>
+
 #include "VulkanContext.h"
 
-namespace rendering {
+namespace rendering
+{
 
-class Swapchain {
-public:
-    Swapchain(VulkanContext* context, uint32_t width, uint32_t height);
+class Swapchain
+{
+   public:
+    Swapchain(VulkanContext* context, uint32_t width, uint32_t height, bool vsync = true);
     ~Swapchain();
 
     Swapchain(const Swapchain&) = delete;
@@ -21,10 +24,13 @@ public:
     uint32_t getImageCount() const { return static_cast<uint32_t>(m_images.size()); }
     VkImageView getDepthImageView() const { return m_depthImageView; }
     VkFormat getDepthFormat() const { return VK_FORMAT_D32_SFLOAT; }
+    bool isVsyncEnabled() const { return m_vsync; }
+    VkPresentModeKHR getPresentMode() const { return m_presentMode; }
 
-
-private:
+   private:
     VulkanContext* m_context{nullptr};
+    bool m_vsync{true};
+    VkPresentModeKHR m_presentMode{VK_PRESENT_MODE_FIFO_KHR};
     VkSwapchainKHR m_swapchain{VK_NULL_HANDLE};
     VkFormat m_imageFormat{};
     VkExtent2D m_extent{};
@@ -36,4 +42,4 @@ private:
     VkImageView m_depthImageView{VK_NULL_HANDLE};
 };
 
-} // namespace rendering
+}  // namespace rendering

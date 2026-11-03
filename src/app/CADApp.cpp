@@ -86,7 +86,7 @@ void CADApp::initSwapchain()
     auto width = m_vkContext->getWidth();
     auto height = m_vkContext->getHeight();
     m_swapchain = std::make_unique<rendering::Swapchain>(
-        m_vkContext.get(), static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+        m_vkContext.get(), static_cast<uint32_t>(width), static_cast<uint32_t>(height), m_vsync);
 }
 
 void CADApp::initRenderPass()
@@ -501,21 +501,39 @@ bool CADApp::exportSTL()
         return false;
     }
 
-    bool ok = io::MeshExporter::exportBinarySTL(m_exportPath, m_currentVertices, m_currentIndices);
+    uint32_t triCount = static_cast<uint32_t>(m_currentIndices.size() / 3);
+    const std::string downloadPath = "/sdcard/Download/mobilecad_part.stl";
+
+    // Attempt to remove any existing file first
+    std::remove(downloadPath.c_str());
+
+    bool ok = io::MeshExporter::exportBinarySTL(downloadPath, m_currentVertices, m_currentIndices);
     if (ok)
     {
-        uint32_t triCount = static_cast<uint32_t>(m_currentIndices.size() / 3);
-        char buf[128];
-        snprintf(buf, sizeof(buf), "Exported: %u tris to part_export.stl", triCount);
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Exported %u tris -> %s", triCount, downloadPath.c_str());
         m_exportStatus = buf;
-        LOGI("%s (%s)", buf, m_exportPath.c_str());
+        LOGI("%s", buf);
+        return true;
     }
-    else
+
+    LOGI("Primary export to %s failed, falling back to internal storage: %s", downloadPath.c_str(),
+         m_exportPath.c_str());
+
+    std::remove(m_exportPath.c_str());
+    ok = io::MeshExporter::exportBinarySTL(m_exportPath, m_currentVertices, m_currentIndices);
+    if (ok)
     {
-        m_exportStatus = "Export failed (check permissions)";
-        LOGE("Failed to export STL to %s", m_exportPath.c_str());
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Exported %u tris -> %s", triCount, m_exportPath.c_str());
+        m_exportStatus = buf;
+        LOGI("%s", buf);
+        return true;
     }
-    return ok;
+
+    m_exportStatus = "Export failed (check permissions)";
+    LOGE("Failed to export STL to both %s and %s", downloadPath.c_str(), m_exportPath.c_str());
+    return false;
 }
 
 void CADApp::initImGui(ANativeWindow* window)
@@ -602,7 +620,7 @@ void CADApp::renderImGui()
 
         ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Vulkan 1.4 Native CAD");
         ImGui::Text("FPS: %.1f (%.2f ms/frame) | %s", fps, 1000.0f / (fps > 0.0f ? fps : 60.0f),
-                    m_vsyncEnabled ? "VSync 120Hz" : "Unlocked");
+                    m_vsync ? "VSync 120Hz" : "Uncapped Benchmark");
         ImGui::Text("Solid: %u verts, %u tris (Total: %u)",
                     static_cast<uint32_t>(m_currentVertices.size()), triCount, vertCount);
         ImGui::Separator();
@@ -707,7 +725,10 @@ void CADApp::renderImGui()
             ImGui::SameLine();
             ImGui::Checkbox("Wireframe", &m_showWireframe);
 
-            ImGui::Checkbox("VSync (120Hz)", &m_vsyncEnabled);
+            if (ImGui::Checkbox("VSync (120Hz Lock)", &m_vsync))
+            {
+                m_vsyncChanged = true;
+            }
         }
 
         // 5. Watertight Binary STL Export
@@ -721,7 +742,7 @@ void CADApp::renderImGui()
             {
                 ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", m_exportStatus.c_str());
             }
-            ImGui::TextDisabled("File: part_export.stl");
+            ImGui::TextDisabled("Target: /sdcard/Download/mobilecad_part.stl");
         }
 
         // 6. Graceful Exit
@@ -947,6 +968,19 @@ bool CADApp::drawFrame()
     }
 
     auto device = m_vkContext->getDevice();
+
+    if (m_vsyncChanged)
+    {
+        LOGI("VSync mode changed to %s — recreating swapchain",
+             m_vsync ? "120Hz FIFO" : "Uncapped Mailbox");
+        vkDeviceWaitIdle(device);
+        cleanupSwapchain();
+        m_swapchain.reset();
+        initSwapchain();
+        initFramebuffers();
+        m_vsyncChanged = false;
+    }
+
     uint32_t frame = m_currentFrame % m_vkContext->getMaxFrames();
 
     VkFence fence = m_vkContext->getFence(frame);
@@ -965,6 +999,7 @@ bool CADApp::drawFrame()
     {
         LOGI("swapchain out of date on acquire, recreating");
         cleanupSwapchain();
+        m_swapchain.reset();
         initSwapchain();
         initFramebuffers();
         return true;  // swapchain recreated; caller will continue on next frame
@@ -1030,6 +1065,7 @@ bool CADApp::drawFrame()
         {
             LOGI("swapchain out of date on present, recreating (image=%u)", imageIndex);
             cleanupSwapchain();
+            m_swapchain.reset();
             initSwapchain();
             initFramebuffers();
             return true;  // caller continues to next drawFrame
