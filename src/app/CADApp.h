@@ -13,6 +13,7 @@
 #include "rendering/Pipeline.h"
 #include "rendering/Swapchain.h"
 #include "rendering/VulkanContext.h"
+#include "utils/math/Ray.h"
 
 namespace app
 {
@@ -37,6 +38,62 @@ struct PrimitiveParams
     int csgMode{0};  // 0 = Solid, 1 = Drill Hole, 2 = Union, 3 = Intersect, 4 = Hollow Pipe
 };
 
+struct SceneObject
+{
+    std::string name{"Part_1"};
+    PrimitiveType primitiveType{PrimitiveType::Box};
+    PrimitiveParams params;
+    utils::math::Vec3f position{0.0f, 0.0f, 0.0f};
+    utils::math::Vec3f rotationDeg{0.0f, 0.0f, 0.0f};
+
+    std::unique_ptr<rendering::MeshBuffer> solidMesh;
+    std::unique_ptr<rendering::MeshBuffer> wireframeMesh;
+    std::unique_ptr<rendering::MeshBuffer> selectedWireframeMesh;
+
+    std::vector<Vertex> cpuVertices;
+    std::vector<uint32_t> cpuIndices;
+    utils::math::Vec3f aabbMin{-0.8f, -0.6f, -0.8f};
+    utils::math::Vec3f aabbMax{0.8f, 0.6f, 0.8f};
+
+    SceneObject() = default;
+    SceneObject(SceneObject&&) noexcept = default;
+    SceneObject& operator=(SceneObject&&) noexcept = default;
+
+    SceneObject(const SceneObject&) = delete;
+    SceneObject& operator=(const SceneObject&) = delete;
+
+    utils::math::Mat4f getModelMatrix() const
+    {
+        constexpr float degToRad = 3.14159265358979323846f / 180.0f;
+        return utils::math::Mat4f::translation(position) *
+               utils::math::Mat4f::rotationY(rotationDeg.y * degToRad) *
+               utils::math::Mat4f::rotationX(rotationDeg.x * degToRad) *
+               utils::math::Mat4f::rotationZ(rotationDeg.z * degToRad);
+    }
+
+    void updateAABB()
+    {
+        if (cpuVertices.empty())
+        {
+            aabbMin = {-0.5f, -0.5f, -0.5f};
+            aabbMax = {0.5f, 0.5f, 0.5f};
+            return;
+        }
+        aabbMin = {cpuVertices[0].position[0], cpuVertices[0].position[1],
+                   cpuVertices[0].position[2]};
+        aabbMax = aabbMin;
+        for (const auto& v : cpuVertices)
+        {
+            aabbMin.x = std::min(aabbMin.x, v.position[0]);
+            aabbMin.y = std::min(aabbMin.y, v.position[1]);
+            aabbMin.z = std::min(aabbMin.z, v.position[2]);
+            aabbMax.x = std::max(aabbMax.x, v.position[0]);
+            aabbMax.y = std::max(aabbMax.y, v.position[1]);
+            aabbMax.z = std::max(aabbMax.z, v.position[2]);
+        }
+    }
+};
+
 class CADApp
 {
    public:
@@ -57,12 +114,31 @@ class CADApp
     // CAD Scene & Parametric Modeling controls
     void setPrimitive(PrimitiveType type);
     void rebuildGeometry();
+    void rebuildObjectGeometry(size_t index);
     bool exportSTL();
     void setExportPath(const std::string& path) { m_exportPath = path; }
     const std::string& getExportPath() const { return m_exportPath; }
     const std::string& getExportStatus() const { return m_exportStatus; }
-    PrimitiveParams& getParams() { return m_params; }
-    const PrimitiveParams& getParams() const { return m_params; }
+
+    std::vector<SceneObject>& getObjects() { return m_objects; }
+    const std::vector<SceneObject>& getObjects() const { return m_objects; }
+    int getSelectedIndex() const { return m_selectedIndex; }
+    void setSelectedIndex(int index) { m_selectedIndex = index; }
+
+    PrimitiveParams& getParams()
+    {
+        if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
+            return m_objects[m_selectedIndex].params;
+        static PrimitiveParams fallback;
+        return fallback;
+    }
+    const PrimitiveParams& getParams() const
+    {
+        if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
+            return m_objects[m_selectedIndex].params;
+        static PrimitiveParams fallback;
+        return fallback;
+    }
 
     void setExitCallback(std::function<void()> cb) { m_exitCallback = std::move(cb); }
 
@@ -105,6 +181,9 @@ class CADApp
     // Touch gesture tracking
     float m_lastTouchX{0.0f};
     float m_lastTouchY{0.0f};
+    float m_downX{0.0f};
+    float m_downY{0.0f};
+    float m_maxDragDist{0.0f};
     float m_lastPinchDist{0.0f};
     float m_lastMidX{0.0f};
     float m_lastMidY{0.0f};
@@ -119,8 +198,6 @@ class CADApp
 
     // Dear ImGui resources & state
     VkDescriptorPool m_imguiDescriptorPool{VK_NULL_HANDLE};
-    PrimitiveType m_currentPrimitive{PrimitiveType::Box};
-    PrimitiveParams m_params;
     bool m_showGrid{true};
     bool m_showSolid{true};
     bool m_showWireframe{false};
@@ -134,12 +211,10 @@ class CADApp
     // Lifecycle exit callback
     std::function<void()> m_exitCallback;
 
-    // Scene geometry
-    std::vector<rendering::Vertex> m_currentVertices;
-    std::vector<uint32_t> m_currentIndices;
+    // Scene geometry & Multi-object scene graph
+    std::vector<SceneObject> m_objects;
+    int m_selectedIndex{0};
     std::unique_ptr<rendering::MeshBuffer> m_gridMesh;
-    std::unique_ptr<rendering::MeshBuffer> m_solidMesh;
-    std::unique_ptr<rendering::MeshBuffer> m_wireframeMesh;
 
     // Sync per-frame
     uint32_t m_currentFrame{0};

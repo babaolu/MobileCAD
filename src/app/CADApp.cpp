@@ -424,94 +424,171 @@ void CADApp::initSceneGeometry()
 
     m_gridMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, gridVertices);
 
-    // 2. 3D Solid CAD Part & Wireframe feature lines
-    rebuildGeometry();
+    m_gridMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, gridVertices);
+
+    // 2. Initial multi-object scene setup: create Part_1
+    m_objects.clear();
+    SceneObject initialObj;
+    initialObj.name = "Part_1";
+    initialObj.primitiveType = PrimitiveType::Box;
+    m_objects.push_back(std::move(initialObj));
+    m_selectedIndex = 0;
+    rebuildObjectGeometry(0);
 }
 
-void CADApp::rebuildGeometry()
+void CADApp::rebuildObjectGeometry(size_t index)
 {
+    if (index >= m_objects.size())
+        return;
+
     auto device = m_vkContext->getDevice();
     auto physDevice = m_vkContext->getPhysicalDevice();
 
     vkDeviceWaitIdle(device);
 
+    auto& obj = m_objects[index];
     geometry::Primitives::MeshData data;
-    if (m_params.csgMode == 0)
+    if (obj.params.csgMode == 0)
     {
-        switch (m_currentPrimitive)
+        switch (obj.primitiveType)
         {
         case PrimitiveType::Box:
-            data = geometry::Primitives::createBox(m_params.width, m_params.height, m_params.depth);
+            data = geometry::Primitives::createBox(obj.params.width, obj.params.height,
+                                                   obj.params.depth);
             break;
         case PrimitiveType::Cylinder:
-            data = geometry::Primitives::createCylinder(m_params.radius, m_params.height,
-                                                        static_cast<uint32_t>(m_params.segments));
+            data = geometry::Primitives::createCylinder(obj.params.radius, obj.params.height,
+                                                        static_cast<uint32_t>(obj.params.segments));
             break;
         case PrimitiveType::Sphere:
             data = geometry::Primitives::createSphere(
-                m_params.radius, static_cast<uint32_t>(m_params.segments * 3 / 4),
-                static_cast<uint32_t>(m_params.segments));
+                obj.params.radius, static_cast<uint32_t>(obj.params.segments * 3 / 4),
+                static_cast<uint32_t>(obj.params.segments));
             break;
         }
     }
-    else if (m_params.csgMode == 1)
+    else if (obj.params.csgMode == 1)
     {
-        data = geometry::Primitives::createCsgDifference(m_params.width, m_params.height,
-                                                         m_params.depth, m_params.holeRadius,
-                                                         m_params.segments);
+        data = geometry::Primitives::createCsgDifference(obj.params.width, obj.params.height,
+                                                         obj.params.depth, obj.params.holeRadius,
+                                                         obj.params.segments);
     }
-    else if (m_params.csgMode == 2)
+    else if (obj.params.csgMode == 2)
     {
-        data = geometry::Primitives::createCsgUnion(m_params.width, m_params.height, m_params.depth,
-                                                    m_params.radius, m_params.segments);
+        data = geometry::Primitives::createCsgUnion(obj.params.width, obj.params.height,
+                                                    obj.params.depth, obj.params.radius,
+                                                    obj.params.segments);
     }
-    else if (m_params.csgMode == 3)
+    else if (obj.params.csgMode == 3)
     {
-        data = geometry::Primitives::createCsgIntersection(
-            m_params.width, m_params.height, m_params.depth, m_params.radius, m_params.segments);
+        data = geometry::Primitives::createCsgIntersection(obj.params.width, obj.params.height,
+                                                           obj.params.depth, obj.params.radius,
+                                                           obj.params.segments);
     }
-    else if (m_params.csgMode == 4)
+    else if (obj.params.csgMode == 4)
     {
-        data = geometry::Primitives::createHollowCylinder(m_params.radius, m_params.holeRadius,
-                                                          m_params.height, m_params.segments);
+        data = geometry::Primitives::createHollowCylinder(obj.params.radius, obj.params.holeRadius,
+                                                          obj.params.height, obj.params.segments);
     }
 
-    m_currentVertices = data.first;
-    m_currentIndices = data.second;
+    obj.cpuVertices = data.first;
+    obj.cpuIndices = data.second;
+    obj.updateAABB();
 
     auto wireLines = geometry::Primitives::createWireframeLines(data.first, data.second);
 
-    m_solidMesh =
+    obj.solidMesh =
         std::make_unique<rendering::MeshBuffer>(device, physDevice, data.first, data.second);
-    m_wireframeMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, wireLines);
+    obj.wireframeMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, wireLines);
+
+    auto selectedWireLines = wireLines;
+    for (auto& v : selectedWireLines)
+    {
+        v.color[0] = 1.0f;
+        v.color[1] = 0.78f;
+        v.color[2] = 0.10f;
+    }
+    obj.selectedWireframeMesh =
+        std::make_unique<rendering::MeshBuffer>(device, physDevice, selectedWireLines);
+}
+
+void CADApp::rebuildGeometry()
+{
+    for (size_t i = 0; i < m_objects.size(); ++i)
+    {
+        rebuildObjectGeometry(i);
+    }
 }
 
 void CADApp::setPrimitive(PrimitiveType type)
 {
-    m_params.csgMode = 0;
-    m_currentPrimitive = type;
-    rebuildGeometry();
+    if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
+    {
+        m_objects[m_selectedIndex].params.csgMode = 0;
+        m_objects[m_selectedIndex].primitiveType = type;
+        rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+    }
 }
 
 bool CADApp::exportSTL()
 {
-    if (m_currentVertices.empty() || m_currentIndices.size() < 3)
+    if (m_objects.empty())
     {
         m_exportStatus = "Export error: No geometry";
         return false;
     }
 
-    uint32_t triCount = static_cast<uint32_t>(m_currentIndices.size() / 3);
+    std::vector<Vertex> combinedVertices;
+    std::vector<uint32_t> combinedIndices;
+
+    for (const auto& obj : m_objects)
+    {
+        if (obj.cpuVertices.empty() || obj.cpuIndices.size() < 3)
+            continue;
+
+        uint32_t baseIndex = static_cast<uint32_t>(combinedVertices.size());
+        auto model = obj.getModelMatrix();
+
+        for (const auto& v : obj.cpuVertices)
+        {
+            Vertex tv = v;
+            utils::math::Vec3f pos{v.position[0], v.position[1], v.position[2]};
+            auto tPos = model * pos;
+            tv.position[0] = tPos.x;
+            tv.position[1] = tPos.y;
+            tv.position[2] = tPos.z;
+
+            utils::math::Vec3f norm{v.normal[0], v.normal[1], v.normal[2]};
+            auto tNorm = model.transformDirection(norm).normalized();
+            tv.normal[0] = tNorm.x;
+            tv.normal[1] = tNorm.y;
+            tv.normal[2] = tNorm.z;
+
+            combinedVertices.push_back(tv);
+        }
+
+        for (uint32_t idx : obj.cpuIndices)
+        {
+            combinedIndices.push_back(baseIndex + idx);
+        }
+    }
+
+    if (combinedVertices.empty() || combinedIndices.size() < 3)
+    {
+        m_exportStatus = "Export error: Empty assembly";
+        return false;
+    }
+
+    uint32_t triCount = static_cast<uint32_t>(combinedIndices.size() / 3);
     const std::string downloadPath = "/sdcard/Download/mobilecad_part.stl";
 
-    // Attempt to remove any existing file first
     std::remove(downloadPath.c_str());
-
-    bool ok = io::MeshExporter::exportBinarySTL(downloadPath, m_currentVertices, m_currentIndices);
+    bool ok = io::MeshExporter::exportBinarySTL(downloadPath, combinedVertices, combinedIndices);
     if (ok)
     {
         char buf[256];
-        snprintf(buf, sizeof(buf), "Exported %u tris -> %s", triCount, downloadPath.c_str());
+        snprintf(buf, sizeof(buf), "Exported %u tris (%zu parts) -> %s", triCount, m_objects.size(),
+                 downloadPath.c_str());
         m_exportStatus = buf;
         LOGI("%s", buf);
         return true;
@@ -521,11 +598,12 @@ bool CADApp::exportSTL()
          m_exportPath.c_str());
 
     std::remove(m_exportPath.c_str());
-    ok = io::MeshExporter::exportBinarySTL(m_exportPath, m_currentVertices, m_currentIndices);
+    ok = io::MeshExporter::exportBinarySTL(m_exportPath, combinedVertices, combinedIndices);
     if (ok)
     {
         char buf[256];
-        snprintf(buf, sizeof(buf), "Exported %u tris -> %s", triCount, m_exportPath.c_str());
+        snprintf(buf, sizeof(buf), "Exported %u tris (%zu parts) -> %s", triCount, m_objects.size(),
+                 m_exportPath.c_str());
         m_exportStatus = buf;
         LOGI("%s", buf);
         return true;
@@ -607,22 +685,31 @@ void CADApp::renderImGui()
     {
         // 1. Performance & Stats
         float fps = ImGui::GetIO().Framerate;
-        uint32_t vertCount = static_cast<uint32_t>(m_currentVertices.size());
-        uint32_t triCount = static_cast<uint32_t>(m_currentIndices.size() / 3);
+        uint32_t solidVerts = 0;
+        uint32_t solidTris = 0;
+        for (const auto& obj : m_objects)
+        {
+            solidVerts += static_cast<uint32_t>(obj.cpuVertices.size());
+            solidTris += static_cast<uint32_t>(obj.cpuIndices.size() / 3);
+        }
+        uint32_t totalVerts = solidVerts;
         if (m_gridMesh && m_showGrid)
         {
-            vertCount += m_gridMesh->getVertexCount();
+            totalVerts += m_gridMesh->getVertexCount();
         }
-        if (m_wireframeMesh && m_showWireframe)
+        for (const auto& obj : m_objects)
         {
-            vertCount += m_wireframeMesh->getVertexCount();
+            if (obj.wireframeMesh && m_showWireframe)
+            {
+                totalVerts += obj.wireframeMesh->getVertexCount();
+            }
         }
 
         ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Vulkan 1.4 Native CAD");
         ImGui::Text("FPS: %.1f (%.2f ms/frame) | %s", fps, 1000.0f / (fps > 0.0f ? fps : 60.0f),
                     m_vsync ? "VSync 120Hz" : "Uncapped Benchmark");
-        ImGui::Text("Solid: %u verts, %u tris (Total: %u)",
-                    static_cast<uint32_t>(m_currentVertices.size()), triCount, vertCount);
+        ImGui::Text("Assembly: %zu parts | %u verts, %u tris (Total: %u)", m_objects.size(),
+                    solidVerts, solidTris, totalVerts);
         ImGui::Separator();
 
         // 2. View Presets
@@ -652,67 +739,147 @@ void CADApp::renderImGui()
             m_camera.resetView();
         }
 
-        // 3. Parametric Modeling & CSG Section
-        if (ImGui::CollapsingHeader("Parameters & CSG", ImGuiTreeNodeFlags_DefaultOpen))
+        // 3. Scene Assembly Section
+        if (ImGui::CollapsingHeader("Scene Assembly", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            bool changed = false;
-
-            const char* csgItems[] = {"Solid Primitive", "Subtract (Drill Hole)",
-                                      "Union (Boss Hub)", "Intersect (Box ^ Sphere)",
-                                      "Hollow Cylinder Pipe"};
-            if (ImGui::Combo("CSG Op", &m_params.csgMode, csgItems, IM_ARRAYSIZE(csgItems)))
+            if (ImGui::Button("+ Add Part"))
             {
-                changed = true;
+                SceneObject newObj;
+                newObj.name = "Part_" + std::to_string(m_objects.size() + 1);
+                newObj.position = {static_cast<float>(m_objects.size()) * 1.5f, 0.0f, 0.0f};
+                m_objects.push_back(std::move(newObj));
+                m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+                rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
             }
-
-            if (m_params.csgMode == 0)
+            ImGui::SameLine();
+            if (ImGui::Button("Duplicate"))
             {
-                ImGui::Text("Primitive:");
-                if (ImGui::RadioButton("Box", m_currentPrimitive == PrimitiveType::Box))
+                if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
                 {
-                    m_currentPrimitive = PrimitiveType::Box;
-                    changed = true;
-                }
-                ImGui::SameLine();
-                if (ImGui::RadioButton("Cylinder", m_currentPrimitive == PrimitiveType::Cylinder))
-                {
-                    m_currentPrimitive = PrimitiveType::Cylinder;
-                    changed = true;
-                }
-                ImGui::SameLine();
-                if (ImGui::RadioButton("Sphere", m_currentPrimitive == PrimitiveType::Sphere))
-                {
-                    m_currentPrimitive = PrimitiveType::Sphere;
-                    changed = true;
+                    const auto& src = m_objects[m_selectedIndex];
+                    SceneObject dup;
+                    dup.name = src.name + "_copy";
+                    dup.primitiveType = src.primitiveType;
+                    dup.params = src.params;
+                    dup.position = src.position + utils::math::Vec3f(0.8f, 0.0f, 0.8f);
+                    dup.rotationDeg = src.rotationDeg;
+                    m_objects.push_back(std::move(dup));
+                    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+                    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
                 }
             }
-
-            // Parametric Sliders
-            if (m_currentPrimitive == PrimitiveType::Box || m_params.csgMode > 0)
+            ImGui::SameLine();
+            if (ImGui::Button("Delete"))
             {
-                changed |= ImGui::SliderFloat("Width", &m_params.width, 0.2f, 4.0f, "%.2f");
-                changed |= ImGui::SliderFloat("Height", &m_params.height, 0.2f, 4.0f, "%.2f");
-                changed |= ImGui::SliderFloat("Depth", &m_params.depth, 0.2f, 4.0f, "%.2f");
-            }
-            if (m_currentPrimitive == PrimitiveType::Cylinder ||
-                m_currentPrimitive == PrimitiveType::Sphere || m_params.csgMode > 0)
-            {
-                changed |= ImGui::SliderFloat("Radius", &m_params.radius, 0.1f, 2.0f, "%.2f");
-            }
-            if (m_params.csgMode == 1 || m_params.csgMode == 4)
-            {
-                changed |=
-                    ImGui::SliderFloat("Hole Radius", &m_params.holeRadius, 0.05f, 1.8f, "%.2f");
-            }
-            if (m_currentPrimitive == PrimitiveType::Cylinder ||
-                m_currentPrimitive == PrimitiveType::Sphere || m_params.csgMode > 0)
-            {
-                changed |= ImGui::SliderInt("Segments", &m_params.segments, 8, 64);
+                if (m_objects.size() > 1 && m_selectedIndex >= 0 &&
+                    m_selectedIndex < static_cast<int>(m_objects.size()))
+                {
+                    m_objects.erase(m_objects.begin() + m_selectedIndex);
+                    if (m_selectedIndex >= static_cast<int>(m_objects.size()))
+                    {
+                        m_selectedIndex = static_cast<int>(m_objects.size()) - 1;
+                    }
+                }
             }
 
-            if (changed)
+            if (!m_objects.empty())
             {
-                rebuildGeometry();
+                const char* previewName =
+                    (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
+                        ? m_objects[m_selectedIndex].name.c_str()
+                        : "(None selected)";
+                if (ImGui::BeginCombo("Select Part", previewName))
+                {
+                    for (int i = 0; i < static_cast<int>(m_objects.size()); ++i)
+                    {
+                        bool isSelected = (m_selectedIndex == i);
+                        if (ImGui::Selectable(m_objects[i].name.c_str(), isSelected))
+                        {
+                            m_selectedIndex = i;
+                        }
+                        if (isSelected)
+                        {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            }
+        }
+
+        // 4. Transform Inspector & Parametric Modeling for Selected Part
+        if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
+        {
+            auto& obj = m_objects[m_selectedIndex];
+
+            if (ImGui::CollapsingHeader("Transform Inspector", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                ImGui::SliderFloat3("Position", &obj.position.x, -4.0f, 4.0f, "%.2f");
+                ImGui::SliderFloat3("Rotate (deg)", &obj.rotationDeg.x, -180.0f, 180.0f, "%.1f");
+            }
+
+            if (ImGui::CollapsingHeader("Parameters & CSG", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                bool changed = false;
+
+                const char* csgItems[] = {"Solid Primitive", "Subtract (Drill Hole)",
+                                          "Union (Boss Hub)", "Intersect (Box ^ Sphere)",
+                                          "Hollow Cylinder Pipe"};
+                if (ImGui::Combo("CSG Op", &obj.params.csgMode, csgItems, IM_ARRAYSIZE(csgItems)))
+                {
+                    changed = true;
+                }
+
+                if (obj.params.csgMode == 0)
+                {
+                    ImGui::Text("Primitive:");
+                    if (ImGui::RadioButton("Box", obj.primitiveType == PrimitiveType::Box))
+                    {
+                        obj.primitiveType = PrimitiveType::Box;
+                        changed = true;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::RadioButton("Cylinder",
+                                           obj.primitiveType == PrimitiveType::Cylinder))
+                    {
+                        obj.primitiveType = PrimitiveType::Cylinder;
+                        changed = true;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::RadioButton("Sphere", obj.primitiveType == PrimitiveType::Sphere))
+                    {
+                        obj.primitiveType = PrimitiveType::Sphere;
+                        changed = true;
+                    }
+                }
+
+                // Parametric Sliders
+                if (obj.primitiveType == PrimitiveType::Box || obj.params.csgMode > 0)
+                {
+                    changed |= ImGui::SliderFloat("Width", &obj.params.width, 0.2f, 4.0f, "%.2f");
+                    changed |= ImGui::SliderFloat("Height", &obj.params.height, 0.2f, 4.0f, "%.2f");
+                    changed |= ImGui::SliderFloat("Depth", &obj.params.depth, 0.2f, 4.0f, "%.2f");
+                }
+                if (obj.primitiveType == PrimitiveType::Cylinder ||
+                    obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
+                {
+                    changed |= ImGui::SliderFloat("Radius", &obj.params.radius, 0.1f, 2.0f, "%.2f");
+                }
+                if (obj.params.csgMode == 1 || obj.params.csgMode == 4)
+                {
+                    changed |= ImGui::SliderFloat("Hole Radius", &obj.params.holeRadius, 0.05f,
+                                                  1.8f, "%.2f");
+                }
+                if (obj.primitiveType == PrimitiveType::Cylinder ||
+                    obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
+                {
+                    changed |= ImGui::SliderInt("Segments", &obj.params.segments, 8, 64);
+                }
+
+                if (changed)
+                {
+                    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                }
             }
         }
 
@@ -812,14 +979,7 @@ void CADApp::cleanup()
         vkDeviceWaitIdle(device);
     }
 
-    if (m_wireframeMesh)
-    {
-        m_wireframeMesh.reset();
-    }
-    if (m_solidMesh)
-    {
-        m_solidMesh.reset();
-    }
+    m_objects.clear();
     if (m_gridMesh)
     {
         m_gridMesh.reset();
@@ -886,14 +1046,19 @@ void CADApp::onWindowResized(ANativeWindow* /*window*/, int32_t width, int32_t h
 void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float y0, float x1,
                           float y1)
 {
-    if (action == AMOTION_EVENT_ACTION_UP || action == AMOTION_EVENT_ACTION_CANCEL)
+    if (action == AMOTION_EVENT_ACTION_DOWN)
     {
-        m_activePointers = 0;
+        m_activePointers = 1;
+        m_downX = x0;
+        m_downY = y0;
+        m_maxDragDist = 0.0f;
+        m_lastTouchX = x0;
+        m_lastTouchY = y0;
         m_lastPinchDist = 0.0f;
         return;
     }
 
-    if (pointerCount != m_activePointers)
+    if (action == AMOTION_EVENT_ACTION_POINTER_DOWN)
     {
         m_activePointers = pointerCount;
         m_lastTouchX = x0;
@@ -904,10 +1069,77 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
             m_lastMidX = (x0 + x1) * 0.5f;
             m_lastMidY = (y0 + y1) * 0.5f;
         }
-        else
+        return;
+    }
+
+    if (action == AMOTION_EVENT_ACTION_UP)
+    {
+        // 3D Ray-Picking on clean tap (< 12.0f movement)
+        if (m_activePointers == 1 && m_maxDragDist < 12.0f && m_swapchain)
         {
-            m_lastPinchDist = 0.0f;
+            float screenW = static_cast<float>(getSwapchainExtentW());
+            float screenH = static_cast<float>(getSwapchainExtentH());
+            if (screenW > 0.0f && screenH > 0.0f)
+            {
+                float aspect = screenW / screenH;
+                auto viewProj = m_camera.getViewProjectionMatrix(aspect);
+                auto ray = utils::math::Ray::screenPointToRay(x0, y0, screenW, screenH, viewProj);
+
+                int closestIndex = -1;
+                float minHit = 1e30f;
+
+                for (size_t i = 0; i < m_objects.size(); ++i)
+                {
+                    const auto& obj = m_objects[i];
+                    auto model = obj.getModelMatrix();
+                    auto invModel = model.inverted();
+
+                    utils::math::Ray localRay;
+                    localRay.origin = invModel * ray.origin;
+                    localRay.dir = invModel.transformDirection(ray.dir).normalized();
+
+                    float tHit = 0.0f;
+                    if (utils::math::Ray::intersectAABB(localRay, obj.aabbMin, obj.aabbMax, tHit))
+                    {
+                        auto hitLocal = localRay.origin + localRay.dir * tHit;
+                        auto hitWorld = model * hitLocal;
+                        float hitDist = (hitWorld - ray.origin).length();
+
+                        if (hitDist < minHit)
+                        {
+                            minHit = hitDist;
+                            closestIndex = static_cast<int>(i);
+                        }
+                    }
+                }
+
+                m_selectedIndex = closestIndex;
+                LOGI("Ray-picking tap at (%.1f, %.1f): selected object %d (%s)", x0, y0,
+                     m_selectedIndex,
+                     (m_selectedIndex >= 0 ? m_objects[m_selectedIndex].name.c_str()
+                                           : "None / Background"));
+            }
         }
+        m_activePointers = 0;
+        m_lastPinchDist = 0.0f;
+        m_maxDragDist = 0.0f;
+        return;
+    }
+
+    if (action == AMOTION_EVENT_ACTION_CANCEL)
+    {
+        m_activePointers = 0;
+        m_lastPinchDist = 0.0f;
+        m_maxDragDist = 0.0f;
+        return;
+    }
+
+    if (action == AMOTION_EVENT_ACTION_POINTER_UP)
+    {
+        m_activePointers = std::max(0, pointerCount - 1);
+        m_lastTouchX = x0;
+        m_lastTouchY = y0;
+        m_lastPinchDist = 0.0f;
         return;
     }
 
@@ -915,6 +1147,9 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
     {
         if (pointerCount == 1)
         {
+            float drag = std::hypot(x0 - m_downX, y0 - m_downY);
+            m_maxDragDist = std::max(m_maxDragDist, drag);
+
             float dx = x0 - m_lastTouchX;
             float dy = y0 - m_lastTouchY;
             m_camera.orbit(dx, dy);
@@ -923,6 +1158,7 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
         }
         else if (pointerCount >= 2)
         {
+            m_maxDragDist = 999.0f;  // Multi-touch gestures are never single-tap selections
             float dist = std::hypot(x1 - x0, y1 - y0);
             float midX = (x0 + x1) * 0.5f;
             float midY = (y0 + y1) * 0.5f;
@@ -939,17 +1175,6 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
             m_lastMidY = midY;
             m_lastTouchX = x0;
             m_lastTouchY = y0;
-        }
-    }
-    else if (action == AMOTION_EVENT_ACTION_DOWN || action == AMOTION_EVENT_ACTION_POINTER_DOWN)
-    {
-        m_lastTouchX = x0;
-        m_lastTouchY = y0;
-        if (pointerCount >= 2)
-        {
-            m_lastPinchDist = std::hypot(x1 - x0, y1 - y0);
-            m_lastMidX = (x0 + x1) * 0.5f;
-            m_lastMidY = (y0 + y1) * 0.5f;
         }
     }
 }
@@ -1148,7 +1373,7 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
     float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
-    utils::math::Mat4f mvp = m_camera.getViewProjectionMatrix(aspect);
+    utils::math::Mat4f viewProj = m_camera.getViewProjectionMatrix(aspect);
 
     // 1. Draw CAD Reference Grid and XYZ Origin Triad (LINE_LIST)
     if (m_showGrid && m_gridMesh && m_gridMesh->getVertexCount() > 0)
@@ -1158,44 +1383,65 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
         vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                           sizeof(utils::math::Mat4f), &mvp);
+                           sizeof(utils::math::Mat4f), &viewProj);
         vkCmdDraw(commandBuffer, m_gridMesh->getVertexCount(), 1, 0, 0);
     }
 
-    // 2. Draw 3D Solid CAD Part (TRIANGLE_LIST)
-    if (m_showSolid && m_solidMesh && m_solidMesh->getVertexCount() > 0)
+    // 2. Draw 3D Solid CAD Parts (TRIANGLE_LIST)
+    if (m_showSolid)
     {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-        VkBuffer vertexBuffers[] = {m_solidMesh->getVertexBuffer()};
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        for (const auto& obj : m_objects)
+        {
+            if (!obj.solidMesh || obj.solidMesh->getVertexCount() == 0)
+                continue;
 
-        if (m_solidMesh->hasIndices())
-        {
-            vkCmdBindIndexBuffer(commandBuffer, m_solidMesh->getIndexBuffer(), 0,
-                                 VK_INDEX_TYPE_UINT32);
-            vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                               sizeof(utils::math::Mat4f), &mvp);
-            vkCmdDrawIndexed(commandBuffer, m_solidMesh->getIndexCount(), 1, 0, 0, 0);
-        }
-        else
-        {
-            vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                               sizeof(utils::math::Mat4f), &mvp);
-            vkCmdDraw(commandBuffer, m_solidMesh->getVertexCount(), 1, 0, 0);
+            utils::math::Mat4f objMvp = viewProj * obj.getModelMatrix();
+            VkBuffer vertexBuffers[] = {obj.solidMesh->getVertexBuffer()};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+
+            if (obj.solidMesh->hasIndices())
+            {
+                vkCmdBindIndexBuffer(commandBuffer, obj.solidMesh->getIndexBuffer(), 0,
+                                     VK_INDEX_TYPE_UINT32);
+                vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   sizeof(utils::math::Mat4f), &objMvp);
+                vkCmdDrawIndexed(commandBuffer, obj.solidMesh->getIndexCount(), 1, 0, 0, 0);
+            }
+            else
+            {
+                vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   sizeof(utils::math::Mat4f), &objMvp);
+                vkCmdDraw(commandBuffer, obj.solidMesh->getVertexCount(), 1, 0, 0);
+            }
         }
     }
 
-    // 3. Draw Wireframe Feature Lines (LINE_LIST)
-    if (m_showWireframe && m_wireframeMesh && m_wireframeMesh->getVertexCount() > 0)
+    // 3. Draw Wireframe Feature Lines & Selected Part Highlighting (LINE_LIST)
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_linePipeline);
+    for (size_t i = 0; i < m_objects.size(); ++i)
     {
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_linePipeline);
-        VkBuffer vertexBuffers[] = {m_wireframeMesh->getVertexBuffer()};
+        const auto& obj = m_objects[i];
+        bool isSelected = (static_cast<int>(i) == m_selectedIndex);
+
+        if (!m_showWireframe && !isSelected)
+            continue;
+
+        auto* meshToDraw = (isSelected && obj.selectedWireframeMesh)
+                               ? obj.selectedWireframeMesh.get()
+                               : obj.wireframeMesh.get();
+
+        if (!meshToDraw || meshToDraw->getVertexCount() == 0)
+            continue;
+
+        utils::math::Mat4f objMvp = viewProj * obj.getModelMatrix();
+        VkBuffer vertexBuffers[] = {meshToDraw->getVertexBuffer()};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
         vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                           sizeof(utils::math::Mat4f), &mvp);
-        vkCmdDraw(commandBuffer, m_wireframeMesh->getVertexCount(), 1, 0, 0);
+                           sizeof(utils::math::Mat4f), &objMvp);
+        vkCmdDraw(commandBuffer, meshToDraw->getVertexCount(), 1, 0, 0);
     }
 
     // 4. Render Dear ImGui Viewport Overlay
