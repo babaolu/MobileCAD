@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "imgui_impl_android.h"
 #include "imgui_impl_vulkan.h"
+#include "io/SceneSerializer.h"
 #include "utils/math/Mat4.h"
 
 #define LOG_TAG "MobileCAD"
@@ -518,6 +519,18 @@ void CADApp::rebuildObjectGeometry(size_t index)
                     manifold::Manifold::Extrude(polys, obj.params.height).Rotate(-90.0, 0.0, 0.0);
             }
             break;
+        case PrimitiveType::Revolve:
+            if (obj.sketchPoints.size() < 3)
+            {
+                obj.sketchPoints = {{-0.4f, 0.0f, -0.6f},
+                                    {0.4f, 0.0f, -0.6f},
+                                    {0.4f, 0.0f, 0.6f},
+                                    {-0.4f, 0.0f, 0.6f}};
+            }
+            data = geometry::Primitives::createRevolvedPolygon(
+                obj.sketchPoints, obj.params.revolveAngle, obj.params.revolveSegments,
+                obj.params.revolveOffset, &obj.localManifold);
+            break;
         }
     }
     else if (obj.params.csgMode == 1)
@@ -754,6 +767,45 @@ void CADApp::extrudeSketchToPart()
 
     LOGI("Extruded sketch profile to 3D Part: %s (height=%.2f, bevelWidth=%.2f, bevelSteps=%d)",
          m_objects[m_selectedIndex].name.c_str(), m_extrudeHeight, m_bevelWidth, m_bevelSegments);
+}
+
+void CADApp::revolveSketchToPart()
+{
+    if (m_sketchPoints.size() < 3 || !m_vkContext)
+        return;
+
+    SceneObject newObj;
+    newObj.name = "Revolve_" + std::to_string(m_objects.size() + 1);
+    newObj.primitiveType = PrimitiveType::Revolve;
+    newObj.params.revolveAngle = m_revolveAngle;
+    newObj.params.revolveSegments = m_revolveSegments;
+    newObj.params.revolveOffset = m_revolveOffset;
+
+    if (m_sketchTool == SketchTool::SmoothCurve && m_sketchPoints.size() >= 3)
+    {
+        newObj.sketchPoints = geometry::Primitives::evaluateClosedCatmullRom(m_sketchPoints, 8);
+    }
+    else
+    {
+        newObj.sketchPoints = m_sketchPoints;
+    }
+
+    newObj.position = {0.0f, 0.0f, 0.0f};
+    newObj.rotationDeg = {0.0f, 0.0f, 0.0f};
+    newObj.isSelected = true;
+    newObj.isNegative = false;
+
+    m_objects.push_back(std::move(newObj));
+    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+
+    m_sketchPoints.clear();
+    m_sketchLineMesh.reset();
+    m_sketchMode = false;
+
+    LOGI("Revolved sketch profile to 3D Part: %s (angle=%.1f deg, segs=%d, offset=%.2f)",
+         m_objects[m_selectedIndex].name.c_str(), m_revolveAngle, m_revolveSegments,
+         m_revolveOffset);
 }
 
 void CADApp::setPrimitive(PrimitiveType type)
@@ -1216,6 +1268,179 @@ bool CADApp::exportSTL()
     m_exportStatus = "Export failed (check permissions)";
     LOGE("Failed to export STL to both %s and %s", downloadPath.c_str(), m_exportPath.c_str());
     return false;
+}
+
+bool CADApp::exportOBJ()
+{
+    if (m_objects.empty())
+    {
+        m_exportStatus = "Export error: No objects in scene";
+        return false;
+    }
+
+    std::vector<io::MeshExporter::OBJMeshPart> parts;
+    parts.reserve(m_objects.size());
+
+    for (size_t i = 0; i < m_objects.size(); ++i)
+    {
+        const auto& obj = m_objects[i];
+        if (obj.cpuVertices.empty() || obj.cpuIndices.size() < 3)
+            continue;
+
+        io::MeshExporter::OBJMeshPart part;
+        part.name = obj.name.empty() ? ("Part_" + std::to_string(i + 1)) : obj.name;
+        part.indices = obj.cpuIndices;
+        part.vertices.reserve(obj.cpuVertices.size());
+
+        auto model = obj.getModelMatrix();
+        auto normalMatrix = model.inverted().transposed();
+
+        for (const auto& v : obj.cpuVertices)
+        {
+            Vertex tv = v;
+            utils::math::Vec3f pos{v.position[0], v.position[1], v.position[2]};
+            auto tPos = model * pos;
+            tv.position[0] = tPos.x;
+            tv.position[1] = tPos.y;
+            tv.position[2] = tPos.z;
+
+            utils::math::Vec3f norm{v.normal[0], v.normal[1], v.normal[2]};
+            auto tNorm = normalMatrix.transformDirection(norm).normalized();
+            tv.normal[0] = tNorm.x;
+            tv.normal[1] = tNorm.y;
+            tv.normal[2] = tNorm.z;
+
+            part.vertices.push_back(tv);
+        }
+
+        parts.push_back(std::move(part));
+    }
+
+    if (parts.empty())
+    {
+        m_exportStatus = "Export error: Empty assembly";
+        return false;
+    }
+
+    const std::string downloadPath = "/sdcard/Download/mobilecad_part.obj";
+    const std::string internalPath = "/data/data/com.mobilecad/files/part_export.obj";
+
+    std::remove(downloadPath.c_str());
+    bool ok = io::MeshExporter::exportWavefrontOBJ(downloadPath, parts);
+    if (ok)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Exported %zu OBJ parts -> %s", parts.size(),
+                 downloadPath.c_str());
+        m_exportStatus = buf;
+        LOGI("%s", buf);
+        return true;
+    }
+
+    LOGI("Primary OBJ export to %s failed, falling back to internal storage: %s",
+         downloadPath.c_str(), internalPath.c_str());
+
+    std::remove(internalPath.c_str());
+    ok = io::MeshExporter::exportWavefrontOBJ(internalPath, parts);
+    if (ok)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Exported %zu OBJ parts -> %s", parts.size(),
+                 internalPath.c_str());
+        m_exportStatus = buf;
+        LOGI("%s", buf);
+        return true;
+    }
+
+    m_exportStatus = "OBJ export failed (check permissions)";
+    LOGE("Failed to export OBJ to both %s and %s", downloadPath.c_str(), internalPath.c_str());
+    return false;
+}
+
+bool CADApp::saveWorkspace()
+{
+    if (m_objects.empty())
+    {
+        m_projectStatus = "Save error: Scene is empty";
+        return false;
+    }
+
+    const std::string downloadPath = "/sdcard/Download/mobilecad_workspace.mcad";
+    const std::string internalPath = "/data/data/com.mobilecad/files/workspace.mcad";
+
+    std::remove(downloadPath.c_str());
+    bool ok = io::SceneSerializer::saveWorkspace(downloadPath, m_objects);
+    if (ok)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Saved %zu parts -> %s", m_objects.size(), downloadPath.c_str());
+        m_projectStatus = buf;
+        LOGI("%s", buf);
+        return true;
+    }
+
+    LOGI("Primary save to %s failed, falling back to internal storage: %s", downloadPath.c_str(),
+         internalPath.c_str());
+
+    std::remove(internalPath.c_str());
+    ok = io::SceneSerializer::saveWorkspace(internalPath, m_objects);
+    if (ok)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Saved %zu parts -> %s", m_objects.size(), internalPath.c_str());
+        m_projectStatus = buf;
+        LOGI("%s", buf);
+        return true;
+    }
+
+    m_projectStatus = "Save failed (check permissions)";
+    LOGE("Failed to save workspace to both %s and %s", downloadPath.c_str(), internalPath.c_str());
+    return false;
+}
+
+bool CADApp::loadWorkspace()
+{
+    if (!m_vkContext)
+        return false;
+
+    const std::string downloadPath = "/sdcard/Download/mobilecad_workspace.mcad";
+    const std::string internalPath = "/data/data/com.mobilecad/files/workspace.mcad";
+
+    std::vector<SceneObject> loadedObjects;
+    bool ok = io::SceneSerializer::loadWorkspace(downloadPath, loadedObjects);
+    std::string loadedFrom = downloadPath;
+    if (!ok)
+    {
+        LOGI("Primary load from %s failed, attempting fallback: %s", downloadPath.c_str(),
+             internalPath.c_str());
+        ok = io::SceneSerializer::loadWorkspace(internalPath, loadedObjects);
+        loadedFrom = internalPath;
+    }
+
+    if (!ok)
+    {
+        m_projectStatus = "Load failed: Cannot find .mcad file";
+        LOGE("Failed to load workspace from both %s and %s", downloadPath.c_str(),
+             internalPath.c_str());
+        return false;
+    }
+
+    auto device = m_vkContext->getDevice();
+    vkDeviceWaitIdle(device);
+
+    m_objects = std::move(loadedObjects);
+    m_selectedIndex = m_objects.empty() ? -1 : 0;
+
+    for (size_t i = 0; i < m_objects.size(); ++i)
+    {
+        rebuildObjectGeometry(i);
+    }
+
+    char buf[256];
+    snprintf(buf, sizeof(buf), "Loaded %zu parts <- %s", m_objects.size(), loadedFrom.c_str());
+    m_projectStatus = buf;
+    LOGI("%s", buf);
+    return true;
 }
 
 void CADApp::initImGui(ANativeWindow* window)
@@ -2178,6 +2403,30 @@ void CADApp::renderImGui()
                 {
                     ImGui::EndDisabled();
                 }
+
+                ImGui::Separator();
+                ImGui::Text("3D Revolve / Lathe:");
+                drawNumericControl("Revolve Angle", &m_revolveAngle, 5.0f, 15.0f, 360.0f,
+                                   "%.1f deg");
+                drawNumericControl("Radial Offset", &m_revolveOffset, 0.05f, 0.05f, 5.0f, "%.2f");
+                float revSegsF = static_cast<float>(m_revolveSegments);
+                if (drawNumericControl("Revolve Steps", &revSegsF, 2.0f, 8.0f, 72.0f, "%.0f"))
+                {
+                    m_revolveSegments = static_cast<int>(revSegsF);
+                }
+
+                if (!canExtrude)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Revolve Profile to 3D Part (Lathe)", ImVec2(-1.0f, 0.0f)))
+                {
+                    revolveSketchToPart();
+                }
+                if (!canExtrude)
+                {
+                    ImGui::EndDisabled();
+                }
             }
 
             // 5. Transform Inspector & Parametric Modeling for Selected Part
@@ -2238,6 +2487,24 @@ void CADApp::renderImGui()
                                                        1.0f, 1.0f, 5.0f, "%.0f", onGeomChanged))
                                 {
                                     obj.params.bevelSegments = static_cast<int>(stepsF);
+                                    changed = true;
+                                }
+                            }
+                            else if (obj.primitiveType == PrimitiveType::Revolve)
+                            {
+                                ImGui::Text("Revolved Lathe Part (%zu sketch points)",
+                                            obj.sketchPoints.size());
+                                changed |= drawNumericControl("Revolve Angle",
+                                                              &obj.params.revolveAngle, 5.0f, 15.0f,
+                                                              360.0f, "%.1f deg", onGeomChanged);
+                                changed |=
+                                    drawNumericControl("Radial Offset", &obj.params.revolveOffset,
+                                                       0.05f, 0.05f, 5.0f, "%.2f", onGeomChanged);
+                                float rSegsF = static_cast<float>(obj.params.revolveSegments);
+                                if (drawNumericControl("Revolve Steps", &rSegsF, 2.0f, 8.0f, 72.0f,
+                                                       "%.0f", onGeomChanged))
+                                {
+                                    obj.params.revolveSegments = static_cast<int>(rSegsF);
                                     changed = true;
                                 }
                             }
@@ -2328,19 +2595,39 @@ void CADApp::renderImGui()
                 }
             }
 
-            // 5. Watertight Binary STL Export
-            if (ImGui::CollapsingHeader("Binary STL Export"))
+            // 5. Project Save / Load & Export Section
+            if (ImGui::CollapsingHeader("Project Save / Load & Export"))
             {
-                if (ImGui::Button("Export STL Model", ImVec2(-1.0f, 0.0f)))
+                if (ImGui::Button("Save Workspace (.mcad)", ImVec2(-1.0f, 0.0f)))
+                {
+                    saveWorkspace();
+                }
+                if (ImGui::Button("Load Workspace (.mcad)", ImVec2(-1.0f, 0.0f)))
+                {
+                    loadWorkspace();
+                }
+                if (!m_projectStatus.empty())
+                {
+                    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.8f, 1.0f), "%s",
+                                       m_projectStatus.c_str());
+                }
+                ImGui::TextDisabled("Workspace: /sdcard/Download/mobilecad_workspace.mcad");
+
+                ImGui::Separator();
+                if (ImGui::Button("Export Binary STL (.stl)", ImVec2(-1.0f, 0.0f)))
                 {
                     exportSTL();
+                }
+                if (ImGui::Button("Export Wavefront OBJ (.obj)", ImVec2(-1.0f, 0.0f)))
+                {
+                    exportOBJ();
                 }
                 if (!m_exportStatus.empty())
                 {
                     ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s",
                                        m_exportStatus.c_str());
                 }
-                ImGui::TextDisabled("Target: /sdcard/Download/mobilecad_part.stl");
+                ImGui::TextDisabled("Exports: /sdcard/Download/mobilecad_part.{stl,obj}");
             }
 
             // 6. Graceful Exit

@@ -928,7 +928,338 @@ class Primitives
         return {std::move(vertices), std::move(indices)};
     }
 
-    // 9. Feature Edge Wireframe Lines (LINE_LIST, normal={0,0,0} for unlit crisp rendering)
+    // 10. 3D Revolve / Lathe Tool (Sweeps 2D profile around Y-axis)
+    static MeshData createRevolvedPolygon(const std::vector<utils::math::Vec3f>& rawPts,
+                                          float revolveAngleDeg = 360.0f, int revolveSegments = 36,
+                                          float radialOffset = 0.4f,
+                                          manifold::Manifold* outManifold = nullptr)
+    {
+        std::vector<rendering::Vertex> vertices;
+        std::vector<uint32_t> indices;
+
+        if (rawPts.size() < 3)
+            return {std::move(vertices), std::move(indices)};
+
+        // 1. Clean points: remove consecutive duplicates and closing duplicate
+        std::vector<utils::math::Vec3f> pts;
+        pts.reserve(rawPts.size());
+        for (const auto& p : rawPts)
+        {
+            if (pts.empty())
+            {
+                pts.push_back({p.x, 0.0f, p.z});
+            }
+            else
+            {
+                float dx = p.x - pts.back().x;
+                float dz = p.z - pts.back().z;
+                if (std::hypot(dx, dz) > 1e-4f)
+                {
+                    pts.push_back({p.x, 0.0f, p.z});
+                }
+            }
+        }
+        if (pts.size() >= 3)
+        {
+            float dx = pts.front().x - pts.back().x;
+            float dz = pts.front().z - pts.back().z;
+            if (std::hypot(dx, dz) <= 1e-4f)
+            {
+                pts.pop_back();
+            }
+        }
+
+        size_t n = pts.size();
+        if (n < 3)
+            return {std::move(vertices), std::move(indices)};
+
+        // 2. Ensure consistent CCW winding in (X, Z) where 2A = sum(x_i * z_{i+1} - x_{i+1} * z_i)
+        // > 0
+        float signedArea2 = 0.0f;
+        for (size_t i = 0; i < n; ++i)
+        {
+            size_t j = (i + 1) % n;
+            signedArea2 += (pts[i].x * pts[j].z - pts[j].x * pts[i].z);
+        }
+
+        if (std::abs(signedArea2) < 1e-6f)
+            return {std::move(vertices), std::move(indices)};
+
+        if (signedArea2 < 0.0f)
+        {
+            std::reverse(pts.begin(), pts.end());
+        }
+
+        // 3. Map 2D profile to radial cross-section coordinates (r_i, h_i)
+        float xMin = pts[0].x;
+        float zMin = pts[0].z;
+        for (const auto& p : pts)
+        {
+            if (p.x < xMin)
+                xMin = p.x;
+            if (p.z < zMin)
+                zMin = p.z;
+        }
+
+        std::vector<float> r(n);
+        std::vector<float> h(n);
+        float safeOffset = std::max(0.05f, radialOffset);
+        for (size_t i = 0; i < n; ++i)
+        {
+            r[i] = std::max(0.05f, (pts[i].x - xMin) + safeOffset);
+            h[i] = pts[i].z - zMin;
+        }
+
+        // 4. Sweeping angle and steps
+        float angleDeg = std::clamp(revolveAngleDeg, 15.0f, 360.0f);
+        bool isFullCircle = (angleDeg >= 359.9f);
+        int steps = std::clamp(revolveSegments, 8, 128);
+        const float pi = 3.14159265359f;
+        float totalAngleRad = angleDeg * (pi / 180.0f);
+
+        // 5. Ear-clipping triangulation (used if partial revolution caps needed)
+        auto cross2D = [](const utils::math::Vec3f& a, const utils::math::Vec3f& b,
+                          const utils::math::Vec3f& c) -> float
+        { return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x); };
+
+        auto pointInTriangle = [&](const utils::math::Vec3f& a, const utils::math::Vec3f& b,
+                                   const utils::math::Vec3f& c, const utils::math::Vec3f& p) -> bool
+        {
+            float c1 = cross2D(a, b, p);
+            float c2 = cross2D(b, c, p);
+            float c3 = cross2D(c, a, p);
+            return (c1 >= -1e-6f && c2 >= -1e-6f && c3 >= -1e-6f);
+        };
+
+        std::vector<int> V(n);
+        for (size_t i = 0; i < n; ++i)
+            V[i] = static_cast<int>(i);
+
+        std::vector<std::array<int, 3>> capTriangles;
+        int count = static_cast<int>(n);
+        int curr = 0;
+        int maxIters = count * count * 2;
+        int iters = 0;
+
+        while (count > 3 && iters < maxIters)
+        {
+            iters++;
+            int prev = (curr + count - 1) % count;
+            int next = (curr + 1) % count;
+
+            int iA = V[prev];
+            int iB = V[curr];
+            int iC = V[next];
+
+            const auto& pA = pts[iA];
+            const auto& pB = pts[iB];
+            const auto& pC = pts[iC];
+
+            bool isEar = cross2D(pA, pB, pC) > 1e-7f;
+            if (isEar)
+            {
+                for (int k = 0; k < count; ++k)
+                {
+                    if (k == prev || k == curr || k == next)
+                        continue;
+                    int iK = V[k];
+                    if (pointInTriangle(pA, pB, pC, pts[iK]))
+                    {
+                        isEar = false;
+                        break;
+                    }
+                }
+            }
+
+            if (isEar)
+            {
+                capTriangles.push_back({iA, iB, iC});
+                V.erase(V.begin() + curr);
+                count--;
+                if (curr >= count)
+                    curr = 0;
+            }
+            else
+            {
+                curr = (curr + 1) % count;
+            }
+        }
+
+        if (count == 3)
+        {
+            capTriangles.push_back({V[0], V[1], V[2]});
+        }
+        else if (count > 3)
+        {
+            for (int k = 1; k < count - 1; ++k)
+            {
+                capTriangles.push_back({V[0], V[k], V[k + 1]});
+            }
+        }
+
+        // 6. Generate Swept Quad Bands
+        const float copperColor[3] = {0.85f, 0.60f, 0.30f};  // CAD Copper / Bronze
+        const float blueColor[3] = {0.35f, 0.65f, 0.95f};    // Anodized CAD Blue
+        const float goldColor[3] = {0.92f, 0.76f, 0.35f};    // Polished Brass / Gold
+
+        for (int s = 0; s < steps; ++s)
+        {
+            float theta0 = totalAngleRad * static_cast<float>(s) / static_cast<float>(steps);
+            float theta1 = totalAngleRad * static_cast<float>(s + 1) / static_cast<float>(steps);
+            float cos0 = std::cos(theta0);
+            float sin0 = std::sin(theta0);
+            float cos1 = std::cos(theta1);
+            float sin1 = std::sin(theta1);
+
+            for (size_t i = 0; i < n; ++i)
+            {
+                size_t j = (i + 1) % n;
+
+                utils::math::Vec3f p00{r[i] * cos0, h[i], r[i] * sin0};
+                utils::math::Vec3f p10{r[i] * cos1, h[i], r[i] * sin1};
+                utils::math::Vec3f p11{r[j] * cos1, h[j], r[j] * sin1};
+                utils::math::Vec3f p01{r[j] * cos0, h[j], r[j] * sin0};
+
+                // Compute outward normal: (p01 - p00) x (p10 - p00)
+                float vx = p01.x - p00.x;
+                float vy = p01.y - p00.y;
+                float vz = p01.z - p00.z;
+
+                float ux = p10.x - p00.x;
+                float uy = p10.y - p00.y;
+                float uz = p10.z - p00.z;
+
+                float nx = vy * uz - vz * uy;
+                float ny = vz * ux - vx * uz;
+                float nz = vx * uy - vy * ux;
+                float nl = std::sqrt(nx * nx + ny * ny + nz * nz);
+                if (nl > 1e-6f)
+                {
+                    nx /= nl;
+                    ny /= nl;
+                    nz /= nl;
+                }
+
+                const float* bandColor = ((i % 2) == 0) ? copperColor : blueColor;
+
+                uint32_t wBase = static_cast<uint32_t>(vertices.size());
+                vertices.push_back({{p00.x, p00.y, p00.z},
+                                    {nx, ny, nz},
+                                    {bandColor[0], bandColor[1], bandColor[2]}});
+                vertices.push_back({{p10.x, p10.y, p10.z},
+                                    {nx, ny, nz},
+                                    {bandColor[0], bandColor[1], bandColor[2]}});
+                vertices.push_back({{p11.x, p11.y, p11.z},
+                                    {nx, ny, nz},
+                                    {bandColor[0], bandColor[1], bandColor[2]}});
+                vertices.push_back({{p01.x, p01.y, p01.z},
+                                    {nx, ny, nz},
+                                    {bandColor[0], bandColor[1], bandColor[2]}});
+
+                indices.push_back(wBase + 0);
+                indices.push_back(wBase + 3);
+                indices.push_back(wBase + 2);
+
+                indices.push_back(wBase + 0);
+                indices.push_back(wBase + 2);
+                indices.push_back(wBase + 1);
+            }
+        }
+
+        // 7. Partial revolution caps (if < 360 deg)
+        if (!isFullCircle)
+        {
+            // Start Face at theta = 0: normal = (0, 0, -1)
+            uint32_t startBase = static_cast<uint32_t>(vertices.size());
+            for (size_t i = 0; i < n; ++i)
+            {
+                vertices.push_back({{r[i], h[i], 0.0f},
+                                    {0.0f, 0.0f, -1.0f},
+                                    {goldColor[0], goldColor[1], goldColor[2]}});
+            }
+            for (const auto& tri : capTriangles)
+            {
+                indices.push_back(startBase + tri[0]);
+                indices.push_back(startBase + tri[2]);
+                indices.push_back(startBase + tri[1]);
+            }
+
+            // End Face at theta = totalAngleRad
+            float cosEnd = std::cos(totalAngleRad);
+            float sinEnd = std::sin(totalAngleRad);
+            float nEnd[3] = {-sinEnd, 0.0f, cosEnd};
+
+            uint32_t endBase = static_cast<uint32_t>(vertices.size());
+            for (size_t i = 0; i < n; ++i)
+            {
+                vertices.push_back({{r[i] * cosEnd, h[i], r[i] * sinEnd},
+                                    {nEnd[0], nEnd[1], nEnd[2]},
+                                    {goldColor[0], goldColor[1], goldColor[2]}});
+            }
+            for (const auto& tri : capTriangles)
+            {
+                indices.push_back(endBase + tri[0]);
+                indices.push_back(endBase + tri[1]);
+                indices.push_back(endBase + tri[2]);
+            }
+        }
+
+        // 8. Watertight manifold construction
+        if (outManifold != nullptr)
+        {
+            std::map<std::tuple<int64_t, int64_t, int64_t>, uint32_t> coordMap;
+            std::vector<uint32_t> remap(vertices.size());
+            std::vector<float> weldedVerts;
+
+            for (size_t k = 0; k < vertices.size(); ++k)
+            {
+                const auto& pos = vertices[k].position;
+                int64_t qx = static_cast<int64_t>(std::round(pos[0] * 100000.0f));
+                int64_t qy = static_cast<int64_t>(std::round(pos[1] * 100000.0f));
+                int64_t qz = static_cast<int64_t>(std::round(pos[2] * 100000.0f));
+                auto key = std::make_tuple(qx, qy, qz);
+                auto it = coordMap.find(key);
+                if (it == coordMap.end())
+                {
+                    uint32_t newIdx = static_cast<uint32_t>(weldedVerts.size() / 3);
+                    coordMap[key] = newIdx;
+                    remap[k] = newIdx;
+                    weldedVerts.push_back(pos[0]);
+                    weldedVerts.push_back(pos[1]);
+                    weldedVerts.push_back(pos[2]);
+                }
+                else
+                {
+                    remap[k] = it->second;
+                }
+            }
+
+            std::vector<uint32_t> weldedIndices;
+            weldedIndices.reserve(indices.size());
+            for (size_t k = 0; k + 2 < indices.size(); k += 3)
+            {
+                uint32_t i0 = remap[indices[k]];
+                uint32_t i1 = remap[indices[k + 1]];
+                uint32_t i2 = remap[indices[k + 2]];
+                if (i0 != i1 && i1 != i2 && i2 != i0)
+                {
+                    weldedIndices.push_back(i0);
+                    weldedIndices.push_back(i1);
+                    weldedIndices.push_back(i2);
+                }
+            }
+
+            manifold::MeshGL gl;
+            gl.numProp = 3;
+            gl.vertProperties = std::move(weldedVerts);
+            gl.triVerts = std::move(weldedIndices);
+            *outManifold = manifold::Manifold(gl);
+        }
+
+        return {std::move(vertices), std::move(indices)};
+    }
+
+    // 11. Feature Edge Wireframe Lines (LINE_LIST, normal={0,0,0} for unlit crisp rendering)
     static std::vector<rendering::Vertex> createWireframeLines(
         const std::vector<rendering::Vertex>& verts, const std::vector<uint32_t>& indices,
         const float color[3] = nullptr)

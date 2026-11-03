@@ -27,7 +27,8 @@ enum class PrimitiveType
     Box,
     Cylinder,
     Sphere,
-    Extrude
+    Extrude,
+    Revolve
 };
 
 enum class SketchTool : int
@@ -55,6 +56,9 @@ struct PrimitiveParams
         0};  // 0 = Solid, 1 = Drill Hole, 2 = Union, 3 = Intersect, 4 = Hollow Pipe, -1 = Baked CSG
     float bevelWidth{0.0f};
     int bevelSegments{1};
+    float revolveAngle{360.0f};
+    int revolveSegments{36};
+    float revolveOffset{0.35f};
 };
 
 struct SceneObject
@@ -214,15 +218,20 @@ class CADApp
     void rebuildGeometry();
     void rebuildObjectGeometry(size_t index);
     bool exportSTL();
+    bool exportOBJ();
+    bool saveWorkspace();
+    bool loadWorkspace();
     void setExportPath(const std::string& path) { m_exportPath = path; }
     const std::string& getExportPath() const { return m_exportPath; }
     const std::string& getExportStatus() const { return m_exportStatus; }
+    const std::string& getProjectStatus() const { return m_projectStatus; }
 
-    // 2D Sketch & Extrude controls
+    // 2D Sketch & Extrude / Revolve controls
     void rebuildSketchMesh();
     void undoSketchPoint();
     void clearSketch();
     void extrudeSketchToPart();
+    void revolveSketchToPart();
     bool isSketchMode() const { return m_sketchMode; }
     void setSketchMode(bool enabled) { m_sketchMode = enabled; }
 
@@ -311,9 +320,10 @@ class CADApp
     bool m_vsync{true};
     bool m_vsyncChanged{false};
 
-    // Export state
+    // Export & Workspace state
     std::string m_exportPath{"/data/data/com.mobilecad/files/part_export.stl"};
     std::string m_exportStatus;
+    std::string m_projectStatus;
 
     // Lifecycle exit callback
     std::function<void()> m_exitCallback;
@@ -333,7 +343,7 @@ class CADApp
     void applyCsgSubtract();
     void applyUnionOrGroup();
 
-    // 2D Sketch & Extrude state
+    // 2D Sketch & Extrude / Revolve state
     bool m_sketchMode{false};
     bool m_snapToGrid{true};
     SketchTool m_sketchTool{SketchTool::Polyline};
@@ -343,6 +353,9 @@ class CADApp
     float m_extrudeHeight{1.2f};
     float m_bevelWidth{0.0f};
     int m_bevelSegments{1};
+    float m_revolveAngle{360.0f};
+    int m_revolveSegments{36};
+    float m_revolveOffset{0.35f};
     std::vector<utils::math::Vec3f> m_sketchPoints;
     std::unique_ptr<rendering::MeshBuffer> m_sketchLineMesh;
 

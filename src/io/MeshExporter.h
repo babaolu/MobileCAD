@@ -118,6 +118,101 @@ class MeshExporter
                             filepath.c_str());
         return true;
     }
+
+    struct OBJMeshPart
+    {
+        std::string name;
+        std::vector<rendering::Vertex> vertices;
+        std::vector<uint32_t> indices;
+    };
+
+    static bool exportWavefrontOBJ(const std::string& filepath,
+                                   const std::vector<OBJMeshPart>& parts)
+    {
+        if (parts.empty())
+        {
+            __android_log_print(ANDROID_LOG_ERROR, "MobileCAD", "OBJ export failed: no parts");
+            return false;
+        }
+
+        try
+        {
+            std::filesystem::path p(filepath);
+            if (p.has_parent_path())
+            {
+                std::filesystem::create_directories(p.parent_path());
+            }
+        }
+        catch (const std::exception& e)
+        {
+            __android_log_print(ANDROID_LOG_ERROR, "MobileCAD", "Failed to create directory: %s",
+                                e.what());
+        }
+
+        std::ofstream file(filepath, std::ios::trunc);
+        if (!file.is_open())
+        {
+            __android_log_print(ANDROID_LOG_ERROR, "MobileCAD", "OBJ export failed: cannot open %s",
+                                filepath.c_str());
+            return false;
+        }
+
+        file << "# MobileCAD 1.4 Wavefront OBJ Export\n";
+        file << "# Assembly with " << parts.size() << " objects\n\n";
+
+        uint32_t globalVertexOffset = 0;
+        size_t totalTris = 0;
+
+        for (const auto& part : parts)
+        {
+            if (part.vertices.empty() || part.indices.size() < 3)
+                continue;
+
+            file << "o " << (part.name.empty() ? "Part" : part.name) << "\n";
+
+            // Vertices
+            for (const auto& v : part.vertices)
+            {
+                file << "v " << v.position[0] << " " << v.position[1] << " " << v.position[2]
+                     << "\n";
+            }
+
+            // Normals
+            for (const auto& v : part.vertices)
+            {
+                file << "vn " << v.normal[0] << " " << v.normal[1] << " " << v.normal[2] << "\n";
+            }
+
+            // Faces (1-based indices in OBJ)
+            file << "s 1\n";
+            for (size_t i = 0; i + 2 < part.indices.size(); i += 3)
+            {
+                uint32_t i0 = globalVertexOffset + part.indices[i] + 1;
+                uint32_t i1 = globalVertexOffset + part.indices[i + 1] + 1;
+                uint32_t i2 = globalVertexOffset + part.indices[i + 2] + 1;
+                file << "f " << i0 << "//" << i0 << " " << i1 << "//" << i1 << " " << i2 << "//"
+                     << i2 << "\n";
+            }
+            file << "\n";
+
+            globalVertexOffset += static_cast<uint32_t>(part.vertices.size());
+            totalTris += (part.indices.size() / 3);
+        }
+
+        file.close();
+        __android_log_print(ANDROID_LOG_INFO, "MobileCAD",
+                            "OBJ export: %zu triangles written to %s", totalTris, filepath.c_str());
+        return true;
+    }
+
+    static bool exportWavefrontOBJ(const std::string& filepath,
+                                   const std::vector<rendering::Vertex>& vertices,
+                                   const std::vector<uint32_t>& indices,
+                                   const std::string& objectName = "MobileCAD_Model")
+    {
+        OBJMeshPart part{objectName, vertices, indices};
+        return exportWavefrontOBJ(filepath, std::vector<OBJMeshPart>{part});
+    }
 };
 
 }  // namespace io
