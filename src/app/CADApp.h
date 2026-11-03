@@ -2,8 +2,10 @@
 #include <android/native_window.h>
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "geometry/Primitives.h"
@@ -36,7 +38,8 @@ struct PrimitiveParams
     float radius{0.6f};
     float holeRadius{0.3f};
     int segments{32};
-    int csgMode{0};  // 0 = Solid, 1 = Drill Hole, 2 = Union, 3 = Intersect, 4 = Hollow Pipe
+    int csgMode{
+        0};  // 0 = Solid, 1 = Drill Hole, 2 = Union, 3 = Intersect, 4 = Hollow Pipe, -1 = Baked CSG
 };
 
 struct SceneObject
@@ -48,6 +51,9 @@ struct SceneObject
     utils::math::Vec3f position{0.0f, 0.0f, 0.0f};
     utils::math::Vec3f rotationDeg{0.0f, 0.0f, 0.0f};
     utils::math::Vec3f scale{1.0f, 1.0f, 1.0f};
+    bool isSelected{false};
+    bool isNegative{false};
+    manifold::Manifold localManifold;
 
     std::unique_ptr<rendering::MeshBuffer> solidMesh;
     std::unique_ptr<rendering::MeshBuffer> wireframeMesh;
@@ -73,6 +79,79 @@ struct SceneObject
                utils::math::Mat4f::rotationY(rotationDeg.y * degToRad) *
                utils::math::Mat4f::rotationZ(rotationDeg.z * degToRad) *
                utils::math::Mat4f::scaling(scale);
+    }
+
+    manifold::Manifold buildManifoldFromMesh() const
+    {
+        if (cpuVertices.empty() || cpuIndices.empty())
+            return manifold::Manifold();
+
+        std::map<std::tuple<int64_t, int64_t, int64_t>, uint32_t> coordMap;
+        std::vector<uint32_t> remap(cpuVertices.size());
+        std::vector<float> weldedVerts;
+
+        for (size_t i = 0; i < cpuVertices.size(); ++i)
+        {
+            const auto& p = cpuVertices[i].position;
+            int64_t qx = static_cast<int64_t>(std::round(p[0] * 100000.0f));
+            int64_t qy = static_cast<int64_t>(std::round(p[1] * 100000.0f));
+            int64_t qz = static_cast<int64_t>(std::round(p[2] * 100000.0f));
+            auto key = std::make_tuple(qx, qy, qz);
+            auto it = coordMap.find(key);
+            if (it == coordMap.end())
+            {
+                uint32_t newIdx = static_cast<uint32_t>(weldedVerts.size() / 3);
+                coordMap[key] = newIdx;
+                remap[i] = newIdx;
+                weldedVerts.push_back(p[0]);
+                weldedVerts.push_back(p[1]);
+                weldedVerts.push_back(p[2]);
+            }
+            else
+            {
+                remap[i] = it->second;
+            }
+        }
+
+        std::vector<uint32_t> weldedIndices;
+        weldedIndices.reserve(cpuIndices.size());
+        for (size_t i = 0; i + 2 < cpuIndices.size(); i += 3)
+        {
+            uint32_t i0 = remap[cpuIndices[i]];
+            uint32_t i1 = remap[cpuIndices[i + 1]];
+            uint32_t i2 = remap[cpuIndices[i + 2]];
+            if (i0 != i1 && i1 != i2 && i2 != i0)
+            {
+                weldedIndices.push_back(i0);
+                weldedIndices.push_back(i1);
+                weldedIndices.push_back(i2);
+            }
+        }
+
+        manifold::MeshGL gl;
+        gl.numProp = 3;
+        gl.vertProperties = std::move(weldedVerts);
+        gl.triVerts = std::move(weldedIndices);
+        manifold::Manifold result(gl);
+        return result;
+    }
+
+    manifold::Manifold getWorldManifold() const
+    {
+        manifold::Manifold m = localManifold;
+        if (m.IsEmpty())
+        {
+            m = buildManifoldFromMesh();
+        }
+        m = m.Scale({scale.x, scale.y, scale.z});
+        if (std::abs(rotationDeg.z) > 1e-4f)
+            m = m.Rotate(0.0, 0.0, rotationDeg.z);
+        if (std::abs(rotationDeg.y) > 1e-4f)
+            m = m.Rotate(0.0, rotationDeg.y, 0.0);
+        if (std::abs(rotationDeg.x) > 1e-4f)
+            m = m.Rotate(rotationDeg.x, 0.0, 0.0);
+        m = m.Translate({position.x, position.y, position.z});
+        return m;
     }
 
     void updateAABB()
@@ -204,8 +283,9 @@ class CADApp
     // Resources
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
     VkRenderPass m_renderPass{VK_NULL_HANDLE};
-    VkPipeline m_pipeline{VK_NULL_HANDLE};      // Solid triangle pipeline
-    VkPipeline m_linePipeline{VK_NULL_HANDLE};  // Grid / axis / wireframe line pipeline
+    VkPipeline m_pipeline{VK_NULL_HANDLE};       // Solid triangle pipeline (opaque +ve)
+    VkPipeline m_ghostPipeline{VK_NULL_HANDLE};  // Transparent ghost pipeline (-ve cutters)
+    VkPipeline m_linePipeline{VK_NULL_HANDLE};   // Grid / axis / wireframe line pipeline
     std::vector<VkFramebuffer> m_swapchainFramebuffers;
 
     // Dear ImGui resources & state
@@ -230,7 +310,13 @@ class CADApp
     // Scene geometry & Multi-object scene graph
     std::vector<SceneObject> m_objects;
     int m_selectedIndex{0};
+    bool m_multiSelectTapMode{false};
+    std::string m_csgStatus;
     std::unique_ptr<rendering::MeshBuffer> m_gridMesh;
+
+    // CSG operations
+    void applyCsgSubtract();
+    void applyUnionOrGroup();
 
     // 2D Sketch & Extrude state
     bool m_sketchMode{false};

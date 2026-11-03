@@ -302,14 +302,35 @@ void CADApp::initGraphicsPipeline()
     pipelineInfo.subpass = 0;
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
-    // 1. Create solid triangle pipeline (for 3D solid CAD part)
+    // 1. Create solid triangle pipeline (for opaque +ve 3D solid CAD parts)
     if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline) !=
         VK_SUCCESS)
     {
         throw std::runtime_error("Failed to create solid graphics pipeline");
     }
 
-    // 2. Create line pipeline (for CAD reference grid and XYZ origin triad)
+    // 2. Create alpha-blended ghost triangle pipeline (for transparent -ve cutters)
+    colorBlendAttachment.blendEnable = VK_TRUE;
+    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                                  &m_ghostPipeline) != VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to create ghost graphics pipeline");
+    }
+
+    // Reset color blend & depth write for line pipeline
+    colorBlendAttachment.blendEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+
+    // 3. Create line pipeline (for CAD reference grid, XYZ triad, and feature wireframes)
     inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
     if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
                                   &m_linePipeline) != VK_SUCCESS)
@@ -430,13 +451,13 @@ void CADApp::initSceneGeometry()
 
     m_gridMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, gridVertices);
 
-    m_gridMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, gridVertices);
-
     // 2. Initial multi-object scene setup: create Part_1
     m_objects.clear();
     SceneObject initialObj;
     initialObj.name = "Part_1";
     initialObj.primitiveType = PrimitiveType::Box;
+    initialObj.isSelected = true;
+    initialObj.isNegative = false;
     m_objects.push_back(std::move(initialObj));
     m_selectedIndex = 0;
     rebuildObjectGeometry(0);
@@ -461,18 +482,39 @@ void CADApp::rebuildObjectGeometry(size_t index)
         case PrimitiveType::Box:
             data = geometry::Primitives::createBox(obj.params.width, obj.params.height,
                                                    obj.params.depth);
+            obj.localManifold = manifold::Manifold::Cube(
+                                    {obj.params.width, obj.params.height, obj.params.depth}, true)
+                                    .Translate({0.0, obj.params.height * 0.5, 0.0});
             break;
         case PrimitiveType::Cylinder:
             data = geometry::Primitives::createCylinder(obj.params.radius, obj.params.height,
                                                         static_cast<uint32_t>(obj.params.segments));
+            obj.localManifold =
+                manifold::Manifold::Cylinder(obj.params.height, obj.params.radius,
+                                             obj.params.radius, obj.params.segments, false)
+                    .Rotate(-90.0, 0.0, 0.0);
             break;
         case PrimitiveType::Sphere:
             data = geometry::Primitives::createSphere(
                 obj.params.radius, static_cast<uint32_t>(obj.params.segments * 3 / 4),
                 static_cast<uint32_t>(obj.params.segments));
+            obj.localManifold = manifold::Manifold::Sphere(obj.params.radius, obj.params.segments)
+                                    .Translate({0.0, obj.params.radius, 0.0});
             break;
         case PrimitiveType::Extrude:
             data = geometry::Primitives::createExtrudedPolygon(obj.sketchPoints, obj.params.height);
+            if (obj.sketchPoints.size() >= 3)
+            {
+                manifold::SimplePolygon poly;
+                poly.reserve(obj.sketchPoints.size());
+                for (const auto& pt : obj.sketchPoints)
+                {
+                    poly.push_back({pt.x, -pt.z});
+                }
+                manifold::Polygons polys = {poly};
+                obj.localManifold =
+                    manifold::Manifold::Extrude(polys, obj.params.height).Rotate(-90.0, 0.0, 0.0);
+            }
             break;
         }
     }
@@ -481,23 +523,81 @@ void CADApp::rebuildObjectGeometry(size_t index)
         data = geometry::Primitives::createCsgDifference(obj.params.width, obj.params.height,
                                                          obj.params.depth, obj.params.holeRadius,
                                                          obj.params.segments);
+        manifold::Manifold box =
+            manifold::Manifold::Cube({obj.params.width, obj.params.height, obj.params.depth}, true)
+                .Translate({0.0, obj.params.height * 0.5, 0.0});
+        manifold::Manifold hole =
+            manifold::Manifold::Cylinder(obj.params.height * 1.5, obj.params.holeRadius,
+                                         obj.params.holeRadius, obj.params.segments, true)
+                .Rotate(-90.0, 0.0, 0.0)
+                .Translate({0.0, obj.params.height * 0.5, 0.0});
+        obj.localManifold = box - hole;
     }
     else if (obj.params.csgMode == 2)
     {
         data = geometry::Primitives::createCsgUnion(obj.params.width, obj.params.height,
                                                     obj.params.depth, obj.params.radius,
                                                     obj.params.segments);
+        float baseH = obj.params.height * 0.4f;
+        float bossH = obj.params.height * 0.8f;
+        manifold::Manifold base =
+            manifold::Manifold::Cube({obj.params.width, baseH, obj.params.depth}, true)
+                .Translate({0.0, baseH * 0.5, 0.0});
+        manifold::Manifold boss =
+            manifold::Manifold::Cylinder(bossH, obj.params.radius, obj.params.radius,
+                                         obj.params.segments, false)
+                .Rotate(-90.0, 0.0, 0.0)
+                .Translate({0.0, baseH * 0.5, 0.0});
+        obj.localManifold = base + boss;
     }
     else if (obj.params.csgMode == 3)
     {
         data = geometry::Primitives::createCsgIntersection(obj.params.width, obj.params.height,
                                                            obj.params.depth, obj.params.radius,
                                                            obj.params.segments);
+        manifold::Manifold box =
+            manifold::Manifold::Cube({obj.params.width, obj.params.height, obj.params.depth}, true)
+                .Translate({0.0, obj.params.height * 0.5, 0.0});
+        manifold::Manifold sphere =
+            manifold::Manifold::Sphere(obj.params.radius, obj.params.segments)
+                .Translate({0.0, obj.params.height * 0.5, 0.0});
+        obj.localManifold = box ^ sphere;
     }
     else if (obj.params.csgMode == 4)
     {
         data = geometry::Primitives::createHollowCylinder(obj.params.radius, obj.params.holeRadius,
                                                           obj.params.height, obj.params.segments);
+        manifold::Manifold outer =
+            manifold::Manifold::Cylinder(obj.params.height, obj.params.radius, obj.params.radius,
+                                         obj.params.segments, false)
+                .Rotate(-90.0, 0.0, 0.0);
+        manifold::Manifold inner =
+            manifold::Manifold::Cylinder(obj.params.height * 1.5, obj.params.holeRadius,
+                                         obj.params.holeRadius, obj.params.segments, true)
+                .Rotate(-90.0, 0.0, 0.0)
+                .Translate({0.0, obj.params.height * 0.5, 0.0});
+        obj.localManifold = outer - inner;
+    }
+    else if (obj.params.csgMode == -1)
+    {
+        if (obj.localManifold.NumVert() > 0)
+        {
+            data = geometry::Primitives::fromManifold(obj.localManifold);
+        }
+        else
+        {
+            data = {obj.cpuVertices, obj.cpuIndices};
+        }
+    }
+
+    if (obj.isNegative)
+    {
+        for (auto& v : data.first)
+        {
+            v.color[0] = 0.95f;
+            v.color[1] = 0.35f;
+            v.color[2] = 0.30f;
+        }
     }
 
     obj.cpuVertices = data.first;
@@ -617,6 +717,8 @@ void CADApp::extrudeSketchToPart()
     newObj.sketchPoints = m_sketchPoints;
     newObj.position = {0.0f, 0.0f, 0.0f};
     newObj.rotationDeg = {0.0f, 0.0f, 0.0f};
+    newObj.isSelected = true;
+    newObj.isNegative = false;
 
     m_objects.push_back(std::move(newObj));
     m_selectedIndex = static_cast<int>(m_objects.size() - 1);
@@ -637,6 +739,373 @@ void CADApp::setPrimitive(PrimitiveType type)
         m_objects[m_selectedIndex].primitiveType = type;
         rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
     }
+}
+
+void CADApp::applyCsgSubtract()
+{
+    if (m_objects.empty())
+    {
+        m_csgStatus = "Subtract: Scene is empty";
+        return;
+    }
+
+    // 1. Identify selected +ve solids
+    std::vector<size_t> posIndices;
+    for (size_t i = 0; i < m_objects.size(); ++i)
+    {
+        if (!m_objects[i].isNegative &&
+            (m_objects[i].isSelected || static_cast<int>(i) == m_selectedIndex))
+        {
+            posIndices.push_back(i);
+        }
+    }
+    if (posIndices.empty())
+    {
+        for (size_t i = 0; i < m_objects.size(); ++i)
+        {
+            if (!m_objects[i].isNegative)
+            {
+                posIndices.push_back(i);
+                break;
+            }
+        }
+    }
+
+    // 2. Identify cutter -ve objects
+    std::vector<size_t> negIndices;
+    for (size_t i = 0; i < m_objects.size(); ++i)
+    {
+        if (m_objects[i].isNegative && m_objects[i].isSelected)
+        {
+            negIndices.push_back(i);
+        }
+    }
+    // If no -ve cutter was explicitly checked, treat ALL -ve objects in the scene as cutters
+    if (negIndices.empty())
+    {
+        for (size_t i = 0; i < m_objects.size(); ++i)
+        {
+            if (m_objects[i].isNegative)
+            {
+                negIndices.push_back(i);
+            }
+        }
+    }
+
+    if (posIndices.empty())
+    {
+        m_csgStatus = "Subtract: No +ve solid selected";
+        return;
+    }
+    if (negIndices.empty())
+    {
+        m_csgStatus = "Subtract: No -ve cutter objects in scene";
+        return;
+    }
+
+    // 3. Union all participating cutters in world space
+    manifold::Manifold combinedCutters;
+    for (size_t idx : negIndices)
+    {
+        manifold::Manifold cutterM = m_objects[idx].getWorldManifold();
+        if (combinedCutters.IsEmpty())
+        {
+            combinedCutters = cutterM;
+        }
+        else
+        {
+            combinedCutters += cutterM;
+        }
+    }
+
+    if (combinedCutters.IsEmpty() || combinedCutters.NumVert() == 0)
+    {
+        m_csgStatus = "Subtract: Cutters produced empty manifold";
+        return;
+    }
+
+    auto device = m_vkContext->getDevice();
+    auto physDevice = m_vkContext->getPhysicalDevice();
+    vkDeviceWaitIdle(device);
+
+    // 4. Subtract combinedCutters from each participating +ve solid
+    size_t cutCount = 0;
+    for (size_t idx : posIndices)
+    {
+        auto& posObj = m_objects[idx];
+        manifold::Manifold worldM = posObj.getWorldManifold();
+        manifold::Manifold cutResult = worldM - combinedCutters;
+
+        if (cutResult.Status() == manifold::Manifold::Error::NoError && !cutResult.IsEmpty())
+        {
+            posObj.localManifold = cutResult;
+            posObj.params.csgMode = -1;  // Baked CSG solid
+            posObj.position = {0.0f, 0.0f, 0.0f};
+            posObj.rotationDeg = {0.0f, 0.0f, 0.0f};
+            posObj.scale = {1.0f, 1.0f, 1.0f};
+
+            auto meshData = geometry::Primitives::fromManifold(cutResult);
+            posObj.cpuVertices = std::move(meshData.first);
+            posObj.cpuIndices = std::move(meshData.second);
+            posObj.updateAABB();
+
+            auto wireLines =
+                geometry::Primitives::createWireframeLines(posObj.cpuVertices, posObj.cpuIndices);
+            posObj.solidMesh = std::make_unique<rendering::MeshBuffer>(
+                device, physDevice, posObj.cpuVertices, posObj.cpuIndices);
+            posObj.wireframeMesh =
+                std::make_unique<rendering::MeshBuffer>(device, physDevice, wireLines);
+
+            auto selectedWireLines = wireLines;
+            for (auto& v : selectedWireLines)
+            {
+                v.color[0] = 1.0f;
+                v.color[1] = 0.78f;
+                v.color[2] = 0.10f;
+            }
+            posObj.selectedWireframeMesh =
+                std::make_unique<rendering::MeshBuffer>(device, physDevice, selectedWireLines);
+
+            cutCount++;
+        }
+    }
+
+    // 5. Remove consumed cutter objects (descending order to preserve indices)
+    std::sort(negIndices.rbegin(), negIndices.rend());
+    for (size_t idx : negIndices)
+    {
+        if (idx < m_objects.size())
+        {
+            m_objects.erase(m_objects.begin() + idx);
+        }
+    }
+
+    if (m_objects.empty())
+    {
+        m_selectedIndex = -1;
+    }
+    else if (m_selectedIndex >= static_cast<int>(m_objects.size()))
+    {
+        m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+    }
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "Subtracted %zu cutter(s) from %zu solid(s)", negIndices.size(),
+             cutCount);
+    m_csgStatus = buf;
+    LOGI("%s", m_csgStatus.c_str());
+}
+
+void CADApp::applyUnionOrGroup()
+{
+    // Collect selected +ve objects
+    std::vector<size_t> posIndices;
+    for (size_t i = 0; i < m_objects.size(); ++i)
+    {
+        if (!m_objects[i].isNegative &&
+            (m_objects[i].isSelected || static_cast<int>(i) == m_selectedIndex))
+        {
+            posIndices.push_back(i);
+        }
+    }
+
+    if (posIndices.size() < 2)
+    {
+        m_csgStatus = "Union/Group requires at least 2 selected +ve objects";
+        return;
+    }
+
+    // Check if any pair of selected objects touch or intersect
+    bool anyTouching = false;
+    for (size_t a = 0; a < posIndices.size() && !anyTouching; ++a)
+    {
+        for (size_t b = a + 1; b < posIndices.size(); ++b)
+        {
+            const auto& objA = m_objects[posIndices[a]];
+            const auto& objB = m_objects[posIndices[b]];
+
+            auto modelA = objA.getModelMatrix();
+            auto modelB = objB.getModelMatrix();
+
+            auto getMinMax = [](const SceneObject& obj, const utils::math::Mat4f& model,
+                                utils::math::Vec3f& outMin, utils::math::Vec3f& outMax)
+            {
+                outMin = {1e30f, 1e30f, 1e30f};
+                outMax = {-1e30f, -1e30f, -1e30f};
+                const float corners[8][3] = {{obj.aabbMin.x, obj.aabbMin.y, obj.aabbMin.z},
+                                             {obj.aabbMax.x, obj.aabbMin.y, obj.aabbMin.z},
+                                             {obj.aabbMin.x, obj.aabbMax.y, obj.aabbMin.z},
+                                             {obj.aabbMax.x, obj.aabbMax.y, obj.aabbMin.z},
+                                             {obj.aabbMin.x, obj.aabbMin.y, obj.aabbMax.z},
+                                             {obj.aabbMax.x, obj.aabbMin.y, obj.aabbMax.z},
+                                             {obj.aabbMin.x, obj.aabbMax.y, obj.aabbMax.z},
+                                             {obj.aabbMax.x, obj.aabbMax.y, obj.aabbMax.z}};
+                for (int c = 0; c < 8; ++c)
+                {
+                    auto w =
+                        model * utils::math::Vec3f(corners[c][0], corners[c][1], corners[c][2]);
+                    outMin.x = std::min(outMin.x, w.x);
+                    outMin.y = std::min(outMin.y, w.y);
+                    outMin.z = std::min(outMin.z, w.z);
+                    outMax.x = std::max(outMax.x, w.x);
+                    outMax.y = std::max(outMax.y, w.y);
+                    outMax.z = std::max(outMax.z, w.z);
+                }
+            };
+
+            utils::math::Vec3f minA, maxA, minB, maxB;
+            getMinMax(objA, modelA, minA, maxA);
+            getMinMax(objB, modelB, minB, maxB);
+
+            constexpr float eps = 0.02f;
+            bool aabbOverlap = (minA.x - eps <= maxB.x && maxA.x + eps >= minB.x) &&
+                               (minA.y - eps <= maxB.y && maxA.y + eps >= minB.y) &&
+                               (minA.z - eps <= maxB.z && maxA.z + eps >= minB.z);
+
+            if (aabbOverlap)
+            {
+                manifold::Manifold mA = objA.getWorldManifold();
+                manifold::Manifold mB = objB.getWorldManifold();
+                manifold::Manifold isect = mA ^ mB;
+                if (!isect.IsEmpty() && isect.NumVert() > 0)
+                {
+                    anyTouching = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    auto device = m_vkContext->getDevice();
+    auto physDevice = m_vkContext->getPhysicalDevice();
+    vkDeviceWaitIdle(device);
+
+    SceneObject newObj;
+    newObj.position = {0.0f, 0.0f, 0.0f};
+    newObj.rotationDeg = {0.0f, 0.0f, 0.0f};
+    newObj.scale = {1.0f, 1.0f, 1.0f};
+    newObj.isSelected = true;
+    newObj.isNegative = false;
+    newObj.params.csgMode = -1;
+
+    size_t count = posIndices.size();
+
+    if (anyTouching)
+    {
+        // 1. Boolean Union
+        newObj.name = "Union_Part_" + std::to_string(m_objects.size() + 1);
+        manifold::Manifold combined;
+        for (size_t idx : posIndices)
+        {
+            manifold::Manifold wm = m_objects[idx].getWorldManifold();
+            if (combined.IsEmpty())
+                combined = wm;
+            else
+                combined += wm;
+        }
+        newObj.localManifold = combined;
+
+        auto meshData = geometry::Primitives::fromManifold(combined);
+        newObj.cpuVertices = std::move(meshData.first);
+        newObj.cpuIndices = std::move(meshData.second);
+        newObj.updateAABB();
+
+        auto wireLines =
+            geometry::Primitives::createWireframeLines(newObj.cpuVertices, newObj.cpuIndices);
+        newObj.solidMesh = std::make_unique<rendering::MeshBuffer>(
+            device, physDevice, newObj.cpuVertices, newObj.cpuIndices);
+        newObj.wireframeMesh =
+            std::make_unique<rendering::MeshBuffer>(device, physDevice, wireLines);
+
+        auto selectedWireLines = wireLines;
+        for (auto& v : selectedWireLines)
+        {
+            v.color[0] = 1.0f;
+            v.color[1] = 0.78f;
+            v.color[2] = 0.10f;
+        }
+        newObj.selectedWireframeMesh =
+            std::make_unique<rendering::MeshBuffer>(device, physDevice, selectedWireLines);
+
+        char buf[128];
+        snprintf(buf, sizeof(buf), "Boolean Union: fused %zu touching parts", count);
+        m_csgStatus = buf;
+    }
+    else
+    {
+        // 2. Disjoint Grouping
+        newObj.name = "Group_Part_" + std::to_string(m_objects.size() + 1);
+        manifold::Manifold combined;
+        for (size_t idx : posIndices)
+        {
+            manifold::Manifold wm = m_objects[idx].getWorldManifold();
+            if (combined.IsEmpty())
+                combined = wm;
+            else
+                combined += wm;
+        }
+        newObj.localManifold = combined;
+
+        for (size_t idx : posIndices)
+        {
+            const auto& src = m_objects[idx];
+            auto model = src.getModelMatrix();
+            auto normalMat = model.inverted().transposed();
+            uint32_t baseIdx = static_cast<uint32_t>(newObj.cpuVertices.size());
+
+            for (const auto& v : src.cpuVertices)
+            {
+                auto wPos = model * utils::math::Vec3f(v.position[0], v.position[1], v.position[2]);
+                auto wNorm = normalMat
+                                 .transformDirection(
+                                     utils::math::Vec3f(v.normal[0], v.normal[1], v.normal[2]))
+                                 .normalized();
+                newObj.cpuVertices.push_back({{wPos.x, wPos.y, wPos.z},
+                                              {wNorm.x, wNorm.y, wNorm.z},
+                                              {v.color[0], v.color[1], v.color[2]}});
+            }
+            for (uint32_t iv : src.cpuIndices)
+            {
+                newObj.cpuIndices.push_back(baseIdx + iv);
+            }
+        }
+        newObj.updateAABB();
+
+        newObj.solidMesh = std::make_unique<rendering::MeshBuffer>(
+            device, physDevice, newObj.cpuVertices, newObj.cpuIndices);
+        auto wireLines =
+            geometry::Primitives::createWireframeLines(newObj.cpuVertices, newObj.cpuIndices);
+        newObj.wireframeMesh =
+            std::make_unique<rendering::MeshBuffer>(device, physDevice, wireLines);
+
+        auto selectedWireLines = wireLines;
+        for (auto& v : selectedWireLines)
+        {
+            v.color[0] = 1.0f;
+            v.color[1] = 0.78f;
+            v.color[2] = 0.10f;
+        }
+        newObj.selectedWireframeMesh =
+            std::make_unique<rendering::MeshBuffer>(device, physDevice, selectedWireLines);
+
+        char buf[128];
+        snprintf(buf, sizeof(buf), "Parts do not touch — grouped %zu parts together", count);
+        m_csgStatus = buf;
+    }
+
+    // Remove the grouped objects (in reverse order)
+    std::sort(posIndices.rbegin(), posIndices.rend());
+    for (size_t idx : posIndices)
+    {
+        if (idx < m_objects.size())
+        {
+            m_objects.erase(m_objects.begin() + idx);
+        }
+    }
+
+    m_objects.push_back(std::move(newObj));
+    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+    LOGI("%s", m_csgStatus.c_str());
 }
 
 bool CADApp::exportSTL()
@@ -1392,9 +1861,7 @@ void CADApp::renderImGui()
             if (ImGui::Button("Right", ImVec2(presetBtnW, 0.0f)))
             {
                 m_camera.setViewRight();
-            }
-
-            // 3. Scene Assembly Section
+            }  // 3. Scene Assembly Section
             if (ImGui::CollapsingHeader("Scene Assembly", ImGuiTreeNodeFlags_DefaultOpen))
             {
                 if (ImGui::Button("+ Add Part"))
@@ -1402,6 +1869,8 @@ void CADApp::renderImGui()
                     SceneObject newObj;
                     newObj.name = "Part_" + std::to_string(m_objects.size() + 1);
                     newObj.position = {static_cast<float>(m_objects.size()) * 1.5f, 0.0f, 0.0f};
+                    newObj.isSelected = true;
+                    newObj.isNegative = false;
                     m_objects.push_back(std::move(newObj));
                     m_selectedIndex = static_cast<int>(m_objects.size() - 1);
                     rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
@@ -1421,6 +1890,9 @@ void CADApp::renderImGui()
                         dup.position = src.position + utils::math::Vec3f(0.8f, 0.0f, 0.8f);
                         dup.rotationDeg = src.rotationDeg;
                         dup.scale = src.scale;
+                        dup.isSelected = true;
+                        dup.isNegative = src.isNegative;
+                        dup.localManifold = src.localManifold;
                         m_objects.push_back(std::move(dup));
                         m_selectedIndex = static_cast<int>(m_objects.size() - 1);
                         rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
@@ -1444,27 +1916,123 @@ void CADApp::renderImGui()
                     }
                 }
 
+                // Multi-select controls
+                ImGui::Checkbox("Multi-Select Tap Mode", &m_multiSelectTapMode);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Select All"))
+                {
+                    for (auto& o : m_objects)
+                        o.isSelected = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Clear"))
+                {
+                    for (auto& o : m_objects)
+                        o.isSelected = false;
+                }
+
                 if (!m_objects.empty())
                 {
-                    const char* previewName = (m_selectedIndex >= 0 &&
-                                               m_selectedIndex < static_cast<int>(m_objects.size()))
-                                                  ? m_objects[m_selectedIndex].name.c_str()
-                                                  : "(None selected)";
-                    if (ImGui::BeginCombo("Select Part", previewName))
+                    ImGui::Spacing();
+                    float availW = ImGui::GetContentRegionAvail().x;
+                    float roleBtnW = 110.0f;
+                    float checkW = 32.0f;
+                    float nameBtnW =
+                        availW - (roleBtnW + checkW + ImGui::GetStyle().ItemSpacing.x * 2.0f);
+                    if (nameBtnW < 120.0f)
+                        nameBtnW = 120.0f;
+
+                    for (size_t i = 0; i < m_objects.size(); ++i)
                     {
-                        for (int i = 0; i < static_cast<int>(m_objects.size()); ++i)
+                        auto& obj = m_objects[i];
+                        ImGui::PushID(static_cast<int>(i));
+
+                        // 1. Checkbox for multi-select
+                        ImGui::Checkbox("##sel", &obj.isSelected);
+                        ImGui::SameLine();
+
+                        // 2. Selectable button for obj.name
+                        bool isActive = (static_cast<int>(i) == m_selectedIndex);
+                        if (isActive)
                         {
-                            bool isSelected = (m_selectedIndex == i);
-                            if (ImGui::Selectable(m_objects[i].name.c_str(), isSelected))
-                            {
-                                m_selectedIndex = i;
-                            }
-                            if (isSelected)
-                            {
-                                ImGui::SetItemDefaultFocus();
-                            }
+                            ImGui::PushStyleColor(ImGuiCol_Button,
+                                                  ImVec4(0.20f, 0.48f, 0.85f, 1.0f));
                         }
-                        ImGui::EndCombo();
+                        if (ImGui::Button(obj.name.c_str(), ImVec2(nameBtnW, 0.0f)))
+                        {
+                            m_selectedIndex = static_cast<int>(i);
+                            obj.isSelected = true;
+                        }
+                        if (isActive)
+                        {
+                            ImGui::PopStyleColor();
+                        }
+                        ImGui::SameLine();
+
+                        // 3. Role toggle: [+ve Solid] vs [-ve Cut]
+                        if (obj.isNegative)
+                        {
+                            ImGui::PushStyleColor(ImGuiCol_Button,
+                                                  ImVec4(0.80f, 0.25f, 0.20f, 0.95f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                                  ImVec4(0.90f, 0.35f, 0.30f, 1.0f));
+                            if (ImGui::Button("-ve Cut", ImVec2(roleBtnW, 0.0f)))
+                            {
+                                obj.isNegative = false;
+                                rebuildObjectGeometry(i);
+                            }
+                            ImGui::PopStyleColor(2);
+                        }
+                        else
+                        {
+                            ImGui::PushStyleColor(ImGuiCol_Button,
+                                                  ImVec4(0.18f, 0.55f, 0.35f, 0.95f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                                  ImVec4(0.25f, 0.68f, 0.45f, 1.0f));
+                            if (ImGui::Button("+ve Solid", ImVec2(roleBtnW, 0.0f)))
+                            {
+                                obj.isNegative = true;
+                                rebuildObjectGeometry(i);
+                            }
+                            ImGui::PopStyleColor(2);
+                        }
+
+                        ImGui::PopID();
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::Spacing();
+
+                    // Boolean & Assembly Action Bar
+                    float actionBtnW =
+                        (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.20f, 0.25f, 0.95f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                          ImVec4(0.85f, 0.28f, 0.32f, 1.0f));
+                    if (ImGui::Button("Apply Subtract (Cut -ve)", ImVec2(actionBtnW, 46.0f)))
+                    {
+                        applyCsgSubtract();
+                    }
+                    ImGui::PopStyleColor(2);
+
+                    ImGui::SameLine();
+
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.45f, 0.75f, 0.95f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                          ImVec4(0.25f, 0.55f, 0.88f, 1.0f));
+                    if (ImGui::Button("Union / Group (+ve)", ImVec2(actionBtnW, 46.0f)))
+                    {
+                        applyUnionOrGroup();
+                    }
+                    ImGui::PopStyleColor(2);
+
+                    if (!m_csgStatus.empty())
+                    {
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.40f, 0.95f, 0.55f, 1.0f), "%s",
+                                           m_csgStatus.c_str());
                     }
                 }
                 else
@@ -1536,83 +2104,97 @@ void CADApp::renderImGui()
                             rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
                     };
 
-                    const char* csgItems[] = {"Solid Primitive", "Subtract (Drill Hole)",
-                                              "Union (Boss Hub)", "Intersect (Box ^ Sphere)",
-                                              "Hollow Cylinder Pipe"};
-                    if (ImGui::Combo("CSG Op", &obj.params.csgMode, csgItems,
-                                     IM_ARRAYSIZE(csgItems)))
+                    if (obj.params.csgMode == -1)
                     {
-                        changed = true;
+                        ImGui::TextColored(ImVec4(0.40f, 0.85f, 1.0f, 1.0f),
+                                           "Baked CSG Solid (%zu triangles)",
+                                           obj.cpuIndices.size() / 3);
+                        ImGui::TextDisabled(
+                            "Transform via Transform Inspector or combine with parts");
                     }
-
-                    if (obj.params.csgMode == 0)
+                    else
                     {
-                        if (obj.primitiveType == PrimitiveType::Extrude)
+                        const char* csgItems[] = {"Solid Primitive", "Subtract (Drill Hole)",
+                                                  "Union (Boss Hub)", "Intersect (Box ^ Sphere)",
+                                                  "Hollow Cylinder Pipe"};
+                        if (ImGui::Combo("CSG Op", &obj.params.csgMode, csgItems,
+                                         IM_ARRAYSIZE(csgItems)))
                         {
-                            ImGui::Text("Extruded Solid Part (%zu sketch points)",
-                                        obj.sketchPoints.size());
-                            changed |= drawNumericControl("Extrude Height", &obj.params.height,
-                                                          0.05f, 0.2f, 4.0f, "%.2f", onGeomChanged);
-                        }
-                        else
-                        {
-                            ImGui::Text("Primitive:");
-                            if (ImGui::RadioButton("Box", obj.primitiveType == PrimitiveType::Box))
-                            {
-                                obj.primitiveType = PrimitiveType::Box;
-                                changed = true;
-                            }
-                            ImGui::SameLine();
-                            if (ImGui::RadioButton("Cylinder",
-                                                   obj.primitiveType == PrimitiveType::Cylinder))
-                            {
-                                obj.primitiveType = PrimitiveType::Cylinder;
-                                changed = true;
-                            }
-                            ImGui::SameLine();
-                            if (ImGui::RadioButton("Sphere",
-                                                   obj.primitiveType == PrimitiveType::Sphere))
-                            {
-                                obj.primitiveType = PrimitiveType::Sphere;
-                                changed = true;
-                            }
-                        }
-                    }
-
-                    // Parametric Steppers with direct numpad
-                    if (obj.primitiveType == PrimitiveType::Box || obj.params.csgMode > 0)
-                    {
-                        changed |= drawNumericControl("Width", &obj.params.width, 0.05f, 0.2f, 4.0f,
-                                                      "%.2f", onGeomChanged);
-                        changed |= drawNumericControl("Height", &obj.params.height, 0.05f, 0.2f,
-                                                      4.0f, "%.2f", onGeomChanged);
-                        changed |= drawNumericControl("Depth", &obj.params.depth, 0.05f, 0.2f, 4.0f,
-                                                      "%.2f", onGeomChanged);
-                    }
-                    if (obj.primitiveType == PrimitiveType::Cylinder ||
-                        obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
-                    {
-                        changed |= drawNumericControl("Radius", &obj.params.radius, 0.05f, 0.1f,
-                                                      2.0f, "%.2f", onGeomChanged);
-                    }
-                    if (obj.params.csgMode == 1 || obj.params.csgMode == 4)
-                    {
-                        changed |= drawNumericControl("Hole Radius", &obj.params.holeRadius, 0.02f,
-                                                      0.05f, 1.8f, "%.2f", onGeomChanged);
-                    }
-                    if (obj.primitiveType == PrimitiveType::Cylinder ||
-                        obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
-                    {
-                        float segs = static_cast<float>(obj.params.segments);
-                        if (drawNumericControl("Segments", &segs, 2.0f, 8.0f, 64.0f, "%.0f",
-                                               [&obj, &segs, onGeomChanged]()
-                                               {
-                                                   obj.params.segments = static_cast<int>(segs);
-                                                   onGeomChanged();
-                                               }))
-                        {
-                            obj.params.segments = static_cast<int>(segs);
                             changed = true;
+                        }
+
+                        if (obj.params.csgMode == 0)
+                        {
+                            if (obj.primitiveType == PrimitiveType::Extrude)
+                            {
+                                ImGui::Text("Extruded Solid Part (%zu sketch points)",
+                                            obj.sketchPoints.size());
+                                changed |=
+                                    drawNumericControl("Extrude Height", &obj.params.height, 0.05f,
+                                                       0.2f, 4.0f, "%.2f", onGeomChanged);
+                            }
+                            else
+                            {
+                                ImGui::Text("Primitive:");
+                                if (ImGui::RadioButton("Box",
+                                                       obj.primitiveType == PrimitiveType::Box))
+                                {
+                                    obj.primitiveType = PrimitiveType::Box;
+                                    changed = true;
+                                }
+                                ImGui::SameLine();
+                                if (ImGui::RadioButton(
+                                        "Cylinder", obj.primitiveType == PrimitiveType::Cylinder))
+                                {
+                                    obj.primitiveType = PrimitiveType::Cylinder;
+                                    changed = true;
+                                }
+                                ImGui::SameLine();
+                                if (ImGui::RadioButton("Sphere",
+                                                       obj.primitiveType == PrimitiveType::Sphere))
+                                {
+                                    obj.primitiveType = PrimitiveType::Sphere;
+                                    changed = true;
+                                }
+                            }
+                        }
+
+                        // Parametric Steppers with direct numpad
+                        if (obj.primitiveType == PrimitiveType::Box || obj.params.csgMode > 0)
+                        {
+                            changed |= drawNumericControl("Width", &obj.params.width, 0.05f, 0.2f,
+                                                          4.0f, "%.2f", onGeomChanged);
+                            changed |= drawNumericControl("Height", &obj.params.height, 0.05f, 0.2f,
+                                                          4.0f, "%.2f", onGeomChanged);
+                            changed |= drawNumericControl("Depth", &obj.params.depth, 0.05f, 0.2f,
+                                                          4.0f, "%.2f", onGeomChanged);
+                        }
+                        if (obj.primitiveType == PrimitiveType::Cylinder ||
+                            obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
+                        {
+                            changed |= drawNumericControl("Radius", &obj.params.radius, 0.05f, 0.1f,
+                                                          2.0f, "%.2f", onGeomChanged);
+                        }
+                        if (obj.params.csgMode == 1 || obj.params.csgMode == 4)
+                        {
+                            changed |=
+                                drawNumericControl("Hole Radius", &obj.params.holeRadius, 0.02f,
+                                                   0.05f, 1.8f, "%.2f", onGeomChanged);
+                        }
+                        if (obj.primitiveType == PrimitiveType::Cylinder ||
+                            obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
+                        {
+                            float segs = static_cast<float>(obj.params.segments);
+                            if (drawNumericControl("Segments", &segs, 2.0f, 8.0f, 64.0f, "%.0f",
+                                                   [&obj, &segs, onGeomChanged]()
+                                                   {
+                                                       obj.params.segments = static_cast<int>(segs);
+                                                       onGeomChanged();
+                                                   }))
+                            {
+                                obj.params.segments = static_cast<int>(segs);
+                                changed = true;
+                            }
                         }
                     }
 
@@ -1741,6 +2323,11 @@ void CADApp::cleanup()
     {
         vkDestroyPipeline(device, m_linePipeline, nullptr);
         m_linePipeline = VK_NULL_HANDLE;
+    }
+    if (m_ghostPipeline != VK_NULL_HANDLE)
+    {
+        vkDestroyPipeline(device, m_ghostPipeline, nullptr);
+        m_ghostPipeline = VK_NULL_HANDLE;
     }
     if (m_pipeline != VK_NULL_HANDLE)
     {
@@ -1886,7 +2473,36 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
                         }
                     }
 
-                    m_selectedIndex = closestIndex;
+                    if (closestIndex >= 0)
+                    {
+                        if (m_multiSelectTapMode)
+                        {
+                            m_objects[closestIndex].isSelected =
+                                !m_objects[closestIndex].isSelected;
+                            m_selectedIndex = closestIndex;
+                        }
+                        else
+                        {
+                            for (auto& obj : m_objects)
+                            {
+                                obj.isSelected = false;
+                            }
+                            m_objects[closestIndex].isSelected = true;
+                            m_selectedIndex = closestIndex;
+                        }
+                    }
+                    else
+                    {
+                        if (!m_multiSelectTapMode)
+                        {
+                            for (auto& obj : m_objects)
+                            {
+                                obj.isSelected = false;
+                            }
+                            m_selectedIndex = -1;
+                        }
+                    }
+
                     LOGI("Ray-picking tap at (%.1f, %.1f): selected object %d (%s)", x0, y0,
                          m_selectedIndex,
                          (m_selectedIndex >= 0 ? m_objects[m_selectedIndex].name.c_str()
@@ -1955,8 +2571,8 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
 
 bool CADApp::drawFrame()
 {
-    if (!m_vkContext || !m_swapchain || !m_pipeline || !m_linePipeline || !m_pipelineLayout ||
-        !m_renderPass)
+    if (!m_vkContext || !m_swapchain || !m_pipeline || !m_ghostPipeline || !m_linePipeline ||
+        !m_pipelineLayout || !m_renderPass)
     {
         LOGE(
             "FATAL: drawFrame #%u — null resource (vkCtx=%p swap=%p pipe=%p linePipe=%p "
@@ -2096,7 +2712,7 @@ bool CADApp::drawFrame()
 void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
 {
     if (!m_renderPass || !m_swapchainFramebuffers[imageIndex] || !m_swapchain || !m_pipeline ||
-        !m_linePipeline || !m_pipelineLayout)
+        !m_ghostPipeline || !m_linePipeline || !m_pipelineLayout)
     {
         LOGE(
             "recordCommandBuffer: null resource — rp=%p fb=%p swap=%p pipe=%p linePipe=%p "
@@ -2179,14 +2795,47 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
     // 3. Draw 3D Solid CAD Parts (TRIANGLE_LIST)
     if (m_showSolid)
     {
+        // Pass 1: Opaque +ve Solids (m_pipeline, alpha = 1.0f)
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
         for (const auto& obj : m_objects)
         {
-            if (!obj.solidMesh || obj.solidMesh->getVertexCount() == 0)
+            if (obj.isNegative || !obj.solidMesh || obj.solidMesh->getVertexCount() == 0)
                 continue;
 
             auto model = obj.getModelMatrix();
             auto normalMatrix = model.inverted().transposed();
+            normalMatrix(3, 3) = 1.0f;
+            PushConstantData pcData{viewProj * model, normalMatrix};
+            VkBuffer vertexBuffers[] = {obj.solidMesh->getVertexBuffer()};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+
+            if (obj.solidMesh->hasIndices())
+            {
+                vkCmdBindIndexBuffer(commandBuffer, obj.solidMesh->getIndexBuffer(), 0,
+                                     VK_INDEX_TYPE_UINT32);
+                vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   sizeof(PushConstantData), &pcData);
+                vkCmdDrawIndexed(commandBuffer, obj.solidMesh->getIndexCount(), 1, 0, 0, 0);
+            }
+            else
+            {
+                vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   sizeof(PushConstantData), &pcData);
+                vkCmdDraw(commandBuffer, obj.solidMesh->getVertexCount(), 1, 0, 0);
+            }
+        }
+
+        // Pass 2: Transparent -ve Ghost Cutters (m_ghostPipeline, alpha = 0.38f)
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ghostPipeline);
+        for (const auto& obj : m_objects)
+        {
+            if (!obj.isNegative || !obj.solidMesh || obj.solidMesh->getVertexCount() == 0)
+                continue;
+
+            auto model = obj.getModelMatrix();
+            auto normalMatrix = model.inverted().transposed();
+            normalMatrix(3, 3) = 0.38f;
             PushConstantData pcData{viewProj * model, normalMatrix};
             VkBuffer vertexBuffers[] = {obj.solidMesh->getVertexBuffer()};
             VkDeviceSize offsets[] = {0};
@@ -2214,9 +2863,9 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
     for (size_t i = 0; i < m_objects.size(); ++i)
     {
         const auto& obj = m_objects[i];
-        bool isSelected = (static_cast<int>(i) == m_selectedIndex);
+        bool isSelected = (obj.isSelected || static_cast<int>(i) == m_selectedIndex);
 
-        if (!m_showWireframe && !isSelected)
+        if (!m_showWireframe && !isSelected && !obj.isNegative)
             continue;
 
         auto* meshToDraw = (isSelected && obj.selectedWireframeMesh)
@@ -2228,6 +2877,7 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
 
         auto model = obj.getModelMatrix();
         auto normalMatrix = model.inverted().transposed();
+        normalMatrix(3, 3) = 1.0f;
         PushConstantData pcData{viewProj * model, normalMatrix};
         VkBuffer vertexBuffers[] = {meshToDraw->getVertexBuffer()};
         VkDeviceSize offsets[] = {0};

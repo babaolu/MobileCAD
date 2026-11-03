@@ -14,6 +14,7 @@ struct VertexOutput {
     float4 position : SV_Position;
     [[vk::location(0)]] float3 normal : NORMAL;
     [[vk::location(1)]] float3 color : COLOR;
+    [[vk::location(2)]] float alpha : TEXCOORD0;
 };
 
 VertexOutput main(VertexInput input) {
@@ -25,6 +26,7 @@ VertexOutput main(VertexInput input) {
         output.normal = float3(0.0, 0.0, 0.0);
     }
     output.color = input.color;
+    output.alpha = pc.model[3][3];
     return output;
 }
 
