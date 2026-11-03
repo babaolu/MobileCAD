@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <map>
@@ -9,6 +10,7 @@
 
 #include "manifold/manifold.h"
 #include "rendering/MeshBuffer.h"
+#include "utils/math/Vec3.h"
 
 namespace geometry
 {
@@ -377,7 +379,223 @@ class Primitives
         return fromManifold(result, cyan);
     }
 
-    // 8. Feature Edge Wireframe Lines (LINE_LIST, normal={0,0,0} for unlit crisp rendering)
+    // 8. 2D Sketch Extrusion (Ear-Clipping triangulation of polygon on XZ plane extruded to Y =
+    // height)
+    static MeshData createExtrudedPolygon(const std::vector<utils::math::Vec3f>& sketchPts,
+                                          float height = 1.2f)
+    {
+        std::vector<rendering::Vertex> vertices;
+        std::vector<uint32_t> indices;
+
+        if (sketchPts.size() < 3)
+            return {std::move(vertices), std::move(indices)};
+
+        // 1. Clean points: remove consecutive duplicates and closing duplicate
+        std::vector<utils::math::Vec3f> pts;
+        pts.reserve(sketchPts.size());
+        for (const auto& p : sketchPts)
+        {
+            if (pts.empty())
+            {
+                pts.push_back({p.x, 0.0f, p.z});
+            }
+            else
+            {
+                float dx = p.x - pts.back().x;
+                float dz = p.z - pts.back().z;
+                if (std::hypot(dx, dz) > 1e-4f)
+                {
+                    pts.push_back({p.x, 0.0f, p.z});
+                }
+            }
+        }
+        if (pts.size() >= 3)
+        {
+            float dx = pts.front().x - pts.back().x;
+            float dz = pts.front().z - pts.back().z;
+            if (std::hypot(dx, dz) <= 1e-4f)
+            {
+                pts.pop_back();
+            }
+        }
+
+        size_t n = pts.size();
+        if (n < 3)
+            return {std::move(vertices), std::move(indices)};
+
+        // 2. Ensure consistent CCW winding in (X, Z) where 2A = sum(x_i * z_{i+1} - x_{i+1} * z_i)
+        // > 0
+        float signedArea2 = 0.0f;
+        for (size_t i = 0; i < n; ++i)
+        {
+            size_t j = (i + 1) % n;
+            signedArea2 += (pts[i].x * pts[j].z - pts[j].x * pts[i].z);
+        }
+
+        if (std::abs(signedArea2) < 1e-6f)
+            return {std::move(vertices), std::move(indices)};
+
+        if (signedArea2 < 0.0f)
+        {
+            std::reverse(pts.begin(), pts.end());
+        }
+
+        // 3. Triangulate 2D polygon using Ear-Clipping
+        auto cross2D = [](const utils::math::Vec3f& a, const utils::math::Vec3f& b,
+                          const utils::math::Vec3f& c) -> float
+        { return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x); };
+
+        auto pointInTriangle = [&](const utils::math::Vec3f& a, const utils::math::Vec3f& b,
+                                   const utils::math::Vec3f& c, const utils::math::Vec3f& p) -> bool
+        {
+            float c1 = cross2D(a, b, p);
+            float c2 = cross2D(b, c, p);
+            float c3 = cross2D(c, a, p);
+            return (c1 >= -1e-6f && c2 >= -1e-6f && c3 >= -1e-6f);
+        };
+
+        std::vector<int> V(n);
+        for (size_t i = 0; i < n; ++i)
+            V[i] = static_cast<int>(i);
+
+        std::vector<std::array<int, 3>> capTriangles;
+        int count = static_cast<int>(n);
+        int curr = 0;
+        int maxIters = count * count * 2;
+        int iters = 0;
+
+        while (count > 3 && iters < maxIters)
+        {
+            iters++;
+            int prev = (curr + count - 1) % count;
+            int next = (curr + 1) % count;
+
+            int iA = V[prev];
+            int iB = V[curr];
+            int iC = V[next];
+
+            const auto& pA = pts[iA];
+            const auto& pB = pts[iB];
+            const auto& pC = pts[iC];
+
+            bool isEar = cross2D(pA, pB, pC) > 1e-7f;
+            if (isEar)
+            {
+                for (int k = 0; k < count; ++k)
+                {
+                    if (k == prev || k == curr || k == next)
+                        continue;
+                    int iK = V[k];
+                    if (pointInTriangle(pA, pB, pC, pts[iK]))
+                    {
+                        isEar = false;
+                        break;
+                    }
+                }
+            }
+
+            if (isEar)
+            {
+                capTriangles.push_back({iA, iB, iC});
+                V.erase(V.begin() + curr);
+                count--;
+                if (curr >= count)
+                    curr = 0;
+            }
+            else
+            {
+                curr = (curr + 1) % count;
+            }
+        }
+
+        if (count == 3)
+        {
+            capTriangles.push_back({V[0], V[1], V[2]});
+        }
+        else if (count > 3)
+        {
+            // Fallback fan triangulation if polygon has complex self-tangencies
+            for (int k = 1; k < count - 1; ++k)
+            {
+                capTriangles.push_back({V[0], V[k], V[k + 1]});
+            }
+        }
+
+        // 4. Generate 3D Mesh
+        const float topColor[3] = {0.92f, 0.76f, 0.35f};   // Polished Brass / Gold Top
+        const float botColor[3] = {0.50f, 0.52f, 0.58f};   // Slate Steel / Cast Iron Bottom
+        const float sideColor[3] = {0.20f, 0.72f, 0.85f};  // Anodized CAD Cyan / Teal
+
+        // A. Top Cap (Y = height, normal = (0, 1, 0))
+        uint32_t topBase = static_cast<uint32_t>(vertices.size());
+        for (size_t i = 0; i < n; ++i)
+        {
+            vertices.push_back({{pts[i].x, height, pts[i].z},
+                                {0.0f, 1.0f, 0.0f},
+                                {topColor[0], topColor[1], topColor[2]}});
+        }
+        for (const auto& tri : capTriangles)
+        {
+            indices.push_back(topBase + tri[0]);
+            indices.push_back(topBase + tri[2]);
+            indices.push_back(topBase + tri[1]);
+        }
+
+        // B. Bottom Cap (Y = 0, normal = (0, -1, 0))
+        uint32_t botBase = static_cast<uint32_t>(vertices.size());
+        for (size_t i = 0; i < n; ++i)
+        {
+            vertices.push_back({{pts[i].x, 0.0f, pts[i].z},
+                                {0.0f, -1.0f, 0.0f},
+                                {botColor[0], botColor[1], botColor[2]}});
+        }
+        for (const auto& tri : capTriangles)
+        {
+            indices.push_back(botBase + tri[0]);
+            indices.push_back(botBase + tri[1]);
+            indices.push_back(botBase + tri[2]);
+        }
+
+        // C. Perimeter Side Walls
+        for (size_t i = 0; i < n; ++i)
+        {
+            size_t j = (i + 1) % n;
+            float dx = pts[j].x - pts[i].x;
+            float dz = pts[j].z - pts[i].z;
+            float len = std::hypot(dx, dz);
+            if (len < 1e-6f)
+                continue;
+
+            float nx = dz / len;
+            float nz = -dx / len;
+
+            uint32_t wBase = static_cast<uint32_t>(vertices.size());
+            vertices.push_back({{pts[i].x, 0.0f, pts[i].z},
+                                {nx, 0.0f, nz},
+                                {sideColor[0], sideColor[1], sideColor[2]}});
+            vertices.push_back({{pts[j].x, 0.0f, pts[j].z},
+                                {nx, 0.0f, nz},
+                                {sideColor[0], sideColor[1], sideColor[2]}});
+            vertices.push_back({{pts[j].x, height, pts[j].z},
+                                {nx, 0.0f, nz},
+                                {sideColor[0], sideColor[1], sideColor[2]}});
+            vertices.push_back({{pts[i].x, height, pts[i].z},
+                                {nx, 0.0f, nz},
+                                {sideColor[0], sideColor[1], sideColor[2]}});
+
+            indices.push_back(wBase + 0);
+            indices.push_back(wBase + 3);
+            indices.push_back(wBase + 2);
+
+            indices.push_back(wBase + 0);
+            indices.push_back(wBase + 2);
+            indices.push_back(wBase + 1);
+        }
+
+        return {std::move(vertices), std::move(indices)};
+    }
+
+    // 9. Feature Edge Wireframe Lines (LINE_LIST, normal={0,0,0} for unlit crisp rendering)
     static std::vector<rendering::Vertex> createWireframeLines(
         const std::vector<rendering::Vertex>& verts, const std::vector<uint32_t>& indices,
         const float color[3] = nullptr)

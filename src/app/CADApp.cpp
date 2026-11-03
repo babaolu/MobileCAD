@@ -156,12 +156,18 @@ void CADApp::initRenderPass()
     }
 }
 
+struct PushConstantData
+{
+    utils::math::Mat4f mvp;
+    utils::math::Mat4f model;
+};
+
 void CADApp::initPipelineLayout()
 {
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(utils::math::Mat4f);
+    pushConstantRange.size = sizeof(PushConstantData);
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -465,6 +471,9 @@ void CADApp::rebuildObjectGeometry(size_t index)
                 obj.params.radius, static_cast<uint32_t>(obj.params.segments * 3 / 4),
                 static_cast<uint32_t>(obj.params.segments));
             break;
+        case PrimitiveType::Extrude:
+            data = geometry::Primitives::createExtrudedPolygon(obj.sketchPoints, obj.params.height);
+            break;
         }
     }
     else if (obj.params.csgMode == 1)
@@ -518,6 +527,106 @@ void CADApp::rebuildGeometry()
     {
         rebuildObjectGeometry(i);
     }
+}
+
+void CADApp::rebuildSketchMesh()
+{
+    if (m_sketchPoints.empty())
+    {
+        m_sketchLineMesh.reset();
+        return;
+    }
+
+    auto device = m_vkContext->getDevice();
+    auto physDevice = m_vkContext->getPhysicalDevice();
+    vkDeviceWaitIdle(device);
+
+    std::vector<rendering::Vertex> lineVerts;
+    size_t n = m_sketchPoints.size();
+
+    // 1. Draw small cross marker at each sketch vertex
+    const float crossColor[3] = {1.0f, 1.0f, 1.0f};
+    const float r = 0.04f;
+    for (const auto& pt : m_sketchPoints)
+    {
+        lineVerts.push_back({{pt.x - r, 0.006f, pt.z},
+                             {0.0f, 0.0f, 0.0f},
+                             {crossColor[0], crossColor[1], crossColor[2]}});
+        lineVerts.push_back({{pt.x + r, 0.006f, pt.z},
+                             {0.0f, 0.0f, 0.0f},
+                             {crossColor[0], crossColor[1], crossColor[2]}});
+        lineVerts.push_back({{pt.x, 0.006f, pt.z - r},
+                             {0.0f, 0.0f, 0.0f},
+                             {crossColor[0], crossColor[1], crossColor[2]}});
+        lineVerts.push_back({{pt.x, 0.006f, pt.z + r},
+                             {0.0f, 0.0f, 0.0f},
+                             {crossColor[0], crossColor[1], crossColor[2]}});
+    }
+
+    // 2. Line segments connecting consecutive points in bright Cyan
+    const float cyan[3] = {0.0f, 0.95f, 1.0f};
+    for (size_t i = 0; i + 1 < n; ++i)
+    {
+        lineVerts.push_back({{m_sketchPoints[i].x, 0.006f, m_sketchPoints[i].z},
+                             {0.0f, 0.0f, 0.0f},
+                             {cyan[0], cyan[1], cyan[2]}});
+        lineVerts.push_back({{m_sketchPoints[i + 1].x, 0.006f, m_sketchPoints[i + 1].z},
+                             {0.0f, 0.0f, 0.0f},
+                             {cyan[0], cyan[1], cyan[2]}});
+    }
+
+    // 3. Closing segment in Yellow/Green if >= 3 points
+    if (n >= 3)
+    {
+        const float yellowGreen[3] = {1.0f, 0.90f, 0.20f};
+        lineVerts.push_back({{m_sketchPoints[n - 1].x, 0.006f, m_sketchPoints[n - 1].z},
+                             {0.0f, 0.0f, 0.0f},
+                             {yellowGreen[0], yellowGreen[1], yellowGreen[2]}});
+        lineVerts.push_back({{m_sketchPoints[0].x, 0.006f, m_sketchPoints[0].z},
+                             {0.0f, 0.0f, 0.0f},
+                             {yellowGreen[0], yellowGreen[1], yellowGreen[2]}});
+    }
+
+    m_sketchLineMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, lineVerts);
+}
+
+void CADApp::undoSketchPoint()
+{
+    if (!m_sketchPoints.empty())
+    {
+        m_sketchPoints.pop_back();
+        rebuildSketchMesh();
+    }
+}
+
+void CADApp::clearSketch()
+{
+    m_sketchPoints.clear();
+    m_sketchLineMesh.reset();
+}
+
+void CADApp::extrudeSketchToPart()
+{
+    if (m_sketchPoints.size() < 3 || !m_vkContext)
+        return;
+
+    SceneObject newObj;
+    newObj.name = "Extrude_" + std::to_string(m_objects.size() + 1);
+    newObj.primitiveType = PrimitiveType::Extrude;
+    newObj.params.height = m_extrudeHeight;
+    newObj.sketchPoints = m_sketchPoints;
+    newObj.position = {0.0f, 0.0f, 0.0f};
+    newObj.rotationDeg = {0.0f, 0.0f, 0.0f};
+
+    m_objects.push_back(std::move(newObj));
+    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+
+    m_sketchPoints.clear();
+    m_sketchLineMesh.reset();
+    m_sketchMode = false;
+
+    LOGI("Extruded sketch profile to 3D Part: %s", m_objects[m_selectedIndex].name.c_str());
 }
 
 void CADApp::setPrimitive(PrimitiveType type)
@@ -761,6 +870,7 @@ void CADApp::renderImGui()
                     dup.name = src.name + "_copy";
                     dup.primitiveType = src.primitiveType;
                     dup.params = src.params;
+                    dup.sketchPoints = src.sketchPoints;
                     dup.position = src.position + utils::math::Vec3f(0.8f, 0.0f, 0.8f);
                     dup.rotationDeg = src.rotationDeg;
                     m_objects.push_back(std::move(dup));
@@ -807,14 +917,55 @@ void CADApp::renderImGui()
             }
         }
 
-        // 4. Transform Inspector & Parametric Modeling for Selected Part
+        // 4. 2D Sketch & Extrude Section
+        if (ImGui::CollapsingHeader("2D Sketch & Extrude", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::Checkbox("2D Sketch Mode (Tap Ground Plane)", &m_sketchMode);
+            ImGui::SameLine();
+            if (ImGui::Button("Snap View to Top"))
+            {
+                m_camera.setViewTop();
+            }
+
+            ImGui::Checkbox("Snap to 0.25 Grid", &m_snapToGrid);
+
+            ImGui::Text("Sketch Points: %zu", m_sketchPoints.size());
+
+            if (ImGui::Button("Undo Point") && !m_sketchPoints.empty())
+            {
+                undoSketchPoint();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Clear Sketch") && !m_sketchPoints.empty())
+            {
+                clearSketch();
+            }
+
+            ImGui::SliderFloat("Extrude Height", &m_extrudeHeight, 0.2f, 4.0f, "%.2f");
+
+            bool canExtrude = (m_sketchPoints.size() >= 3);
+            if (!canExtrude)
+            {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Extrude Profile to 3D Part", ImVec2(-1.0f, 0.0f)))
+            {
+                extrudeSketchToPart();
+            }
+            if (!canExtrude)
+            {
+                ImGui::EndDisabled();
+            }
+        }
+
+        // 5. Transform Inspector & Parametric Modeling for Selected Part
         if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
         {
             auto& obj = m_objects[m_selectedIndex];
 
             if (ImGui::CollapsingHeader("Transform Inspector", ImGuiTreeNodeFlags_DefaultOpen))
             {
-                ImGui::SliderFloat3("Position", &obj.position.x, -4.0f, 4.0f, "%.2f");
+                ImGui::SliderFloat3("Position", &obj.position.x, -5.0f, 5.0f, "%.2f");
                 ImGui::SliderFloat3("Rotate (deg)", &obj.rotationDeg.x, -180.0f, 180.0f, "%.1f");
             }
 
@@ -832,24 +983,35 @@ void CADApp::renderImGui()
 
                 if (obj.params.csgMode == 0)
                 {
-                    ImGui::Text("Primitive:");
-                    if (ImGui::RadioButton("Box", obj.primitiveType == PrimitiveType::Box))
+                    if (obj.primitiveType == PrimitiveType::Extrude)
                     {
-                        obj.primitiveType = PrimitiveType::Box;
-                        changed = true;
+                        ImGui::Text("Extruded Solid Part (%zu sketch points)",
+                                    obj.sketchPoints.size());
+                        changed |= ImGui::SliderFloat("Extrude Height", &obj.params.height, 0.2f,
+                                                      4.0f, "%.2f");
                     }
-                    ImGui::SameLine();
-                    if (ImGui::RadioButton("Cylinder",
-                                           obj.primitiveType == PrimitiveType::Cylinder))
+                    else
                     {
-                        obj.primitiveType = PrimitiveType::Cylinder;
-                        changed = true;
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::RadioButton("Sphere", obj.primitiveType == PrimitiveType::Sphere))
-                    {
-                        obj.primitiveType = PrimitiveType::Sphere;
-                        changed = true;
+                        ImGui::Text("Primitive:");
+                        if (ImGui::RadioButton("Box", obj.primitiveType == PrimitiveType::Box))
+                        {
+                            obj.primitiveType = PrimitiveType::Box;
+                            changed = true;
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::RadioButton("Cylinder",
+                                               obj.primitiveType == PrimitiveType::Cylinder))
+                        {
+                            obj.primitiveType = PrimitiveType::Cylinder;
+                            changed = true;
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::RadioButton("Sphere",
+                                               obj.primitiveType == PrimitiveType::Sphere))
+                        {
+                            obj.primitiveType = PrimitiveType::Sphere;
+                            changed = true;
+                        }
                     }
                 }
 
@@ -980,6 +1142,7 @@ void CADApp::cleanup()
     }
 
     m_objects.clear();
+    m_sketchLineMesh.reset();
     if (m_gridMesh)
     {
         m_gridMesh.reset();
@@ -1074,7 +1237,7 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
 
     if (action == AMOTION_EVENT_ACTION_UP)
     {
-        // 3D Ray-Picking on clean tap (< 12.0f movement)
+        // 3D Ray-Picking / 2D Sketch Tap on clean tap (< 12.0f movement)
         if (m_activePointers == 1 && m_maxDragDist < 12.0f && m_swapchain)
         {
             float screenW = static_cast<float>(getSwapchainExtentW());
@@ -1085,39 +1248,67 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
                 auto viewProj = m_camera.getViewProjectionMatrix(aspect);
                 auto ray = utils::math::Ray::screenPointToRay(x0, y0, screenW, screenH, viewProj);
 
-                int closestIndex = -1;
-                float minHit = 1e30f;
-
-                for (size_t i = 0; i < m_objects.size(); ++i)
+                if (m_sketchMode)
                 {
-                    const auto& obj = m_objects[i];
-                    auto model = obj.getModelMatrix();
-                    auto invModel = model.inverted();
-
-                    utils::math::Ray localRay;
-                    localRay.origin = invModel * ray.origin;
-                    localRay.dir = invModel.transformDirection(ray.dir).normalized();
-
-                    float tHit = 0.0f;
-                    if (utils::math::Ray::intersectAABB(localRay, obj.aabbMin, obj.aabbMax, tHit))
+                    // Intersect with ground plane Y = 0
+                    if (std::abs(ray.dir.y) > 1e-4f)
                     {
-                        auto hitLocal = localRay.origin + localRay.dir * tHit;
-                        auto hitWorld = model * hitLocal;
-                        float hitDist = (hitWorld - ray.origin).length();
-
-                        if (hitDist < minHit)
+                        float t = -ray.origin.y / ray.dir.y;
+                        if (t > 0.0f)
                         {
-                            minHit = hitDist;
-                            closestIndex = static_cast<int>(i);
+                            float hitX = ray.origin.x + t * ray.dir.x;
+                            float hitZ = ray.origin.z + t * ray.dir.z;
+                            if (m_snapToGrid)
+                            {
+                                hitX = std::round(hitX / 0.25f) * 0.25f;
+                                hitZ = std::round(hitZ / 0.25f) * 0.25f;
+                            }
+                            m_sketchPoints.push_back({hitX, 0.005f, hitZ});
+                            rebuildSketchMesh();
+                            LOGI(
+                                "Sketch tap at (%.1f, %.1f) -> placed point (%.2f, 0.005, %.2f) "
+                                "[total %zu pts]",
+                                x0, y0, hitX, hitZ, m_sketchPoints.size());
                         }
                     }
                 }
+                else
+                {
+                    int closestIndex = -1;
+                    float minHit = 1e30f;
 
-                m_selectedIndex = closestIndex;
-                LOGI("Ray-picking tap at (%.1f, %.1f): selected object %d (%s)", x0, y0,
-                     m_selectedIndex,
-                     (m_selectedIndex >= 0 ? m_objects[m_selectedIndex].name.c_str()
-                                           : "None / Background"));
+                    for (size_t i = 0; i < m_objects.size(); ++i)
+                    {
+                        const auto& obj = m_objects[i];
+                        auto model = obj.getModelMatrix();
+                        auto invModel = model.inverted();
+
+                        utils::math::Ray localRay;
+                        localRay.origin = invModel * ray.origin;
+                        localRay.dir = invModel.transformDirection(ray.dir).normalized();
+
+                        float tHit = 0.0f;
+                        if (utils::math::Ray::intersectAABB(localRay, obj.aabbMin, obj.aabbMax,
+                                                            tHit))
+                        {
+                            auto hitLocal = localRay.origin + localRay.dir * tHit;
+                            auto hitWorld = model * hitLocal;
+                            float hitDist = (hitWorld - ray.origin).length();
+
+                            if (hitDist < minHit)
+                            {
+                                minHit = hitDist;
+                                closestIndex = static_cast<int>(i);
+                            }
+                        }
+                    }
+
+                    m_selectedIndex = closestIndex;
+                    LOGI("Ray-picking tap at (%.1f, %.1f): selected object %d (%s)", x0, y0,
+                         m_selectedIndex,
+                         (m_selectedIndex >= 0 ? m_objects[m_selectedIndex].name.c_str()
+                                               : "None / Background"));
+                }
             }
         }
         m_activePointers = 0;
@@ -1382,12 +1573,26 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
         VkBuffer vertexBuffers[] = {m_gridMesh->getVertexBuffer()};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        PushConstantData pcData{viewProj, utils::math::Mat4f::identity()};
         vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                           sizeof(utils::math::Mat4f), &viewProj);
+                           sizeof(PushConstantData), &pcData);
         vkCmdDraw(commandBuffer, m_gridMesh->getVertexCount(), 1, 0, 0);
     }
 
-    // 2. Draw 3D Solid CAD Parts (TRIANGLE_LIST)
+    // 2. Draw 2D Sketch Profile Lines (LINE_LIST)
+    if (m_sketchLineMesh && m_sketchLineMesh->getVertexCount() > 0)
+    {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_linePipeline);
+        VkBuffer vertexBuffers[] = {m_sketchLineMesh->getVertexBuffer()};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        PushConstantData pcData{viewProj, utils::math::Mat4f::identity()};
+        vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                           sizeof(PushConstantData), &pcData);
+        vkCmdDraw(commandBuffer, m_sketchLineMesh->getVertexCount(), 1, 0, 0);
+    }
+
+    // 3. Draw 3D Solid CAD Parts (TRIANGLE_LIST)
     if (m_showSolid)
     {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
@@ -1396,7 +1601,8 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
             if (!obj.solidMesh || obj.solidMesh->getVertexCount() == 0)
                 continue;
 
-            utils::math::Mat4f objMvp = viewProj * obj.getModelMatrix();
+            auto model = obj.getModelMatrix();
+            PushConstantData pcData{viewProj * model, model};
             VkBuffer vertexBuffers[] = {obj.solidMesh->getVertexBuffer()};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
@@ -1406,19 +1612,19 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
                 vkCmdBindIndexBuffer(commandBuffer, obj.solidMesh->getIndexBuffer(), 0,
                                      VK_INDEX_TYPE_UINT32);
                 vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                                   sizeof(utils::math::Mat4f), &objMvp);
+                                   sizeof(PushConstantData), &pcData);
                 vkCmdDrawIndexed(commandBuffer, obj.solidMesh->getIndexCount(), 1, 0, 0, 0);
             }
             else
             {
                 vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                                   sizeof(utils::math::Mat4f), &objMvp);
+                                   sizeof(PushConstantData), &pcData);
                 vkCmdDraw(commandBuffer, obj.solidMesh->getVertexCount(), 1, 0, 0);
             }
         }
     }
 
-    // 3. Draw Wireframe Feature Lines & Selected Part Highlighting (LINE_LIST)
+    // 4. Draw Wireframe Feature Lines & Selected Part Highlighting (LINE_LIST)
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_linePipeline);
     for (size_t i = 0; i < m_objects.size(); ++i)
     {
@@ -1435,12 +1641,13 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
         if (!meshToDraw || meshToDraw->getVertexCount() == 0)
             continue;
 
-        utils::math::Mat4f objMvp = viewProj * obj.getModelMatrix();
+        auto model = obj.getModelMatrix();
+        PushConstantData pcData{viewProj * model, model};
         VkBuffer vertexBuffers[] = {meshToDraw->getVertexBuffer()};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
         vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                           sizeof(utils::math::Mat4f), &objMvp);
+                           sizeof(PushConstantData), &pcData);
         vkCmdDraw(commandBuffer, meshToDraw->getVertexCount(), 1, 0, 0);
     }
 

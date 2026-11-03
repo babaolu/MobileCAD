@@ -24,7 +24,8 @@ enum class PrimitiveType
 {
     Box,
     Cylinder,
-    Sphere
+    Sphere,
+    Extrude
 };
 
 struct PrimitiveParams
@@ -43,6 +44,7 @@ struct SceneObject
     std::string name{"Part_1"};
     PrimitiveType primitiveType{PrimitiveType::Box};
     PrimitiveParams params;
+    std::vector<utils::math::Vec3f> sketchPoints;
     utils::math::Vec3f position{0.0f, 0.0f, 0.0f};
     utils::math::Vec3f rotationDeg{0.0f, 0.0f, 0.0f};
 
@@ -119,6 +121,14 @@ class CADApp
     void setExportPath(const std::string& path) { m_exportPath = path; }
     const std::string& getExportPath() const { return m_exportPath; }
     const std::string& getExportStatus() const { return m_exportStatus; }
+
+    // 2D Sketch & Extrude controls
+    void rebuildSketchMesh();
+    void undoSketchPoint();
+    void clearSketch();
+    void extrudeSketchToPart();
+    bool isSketchMode() const { return m_sketchMode; }
+    void setSketchMode(bool enabled) { m_sketchMode = enabled; }
 
     std::vector<SceneObject>& getObjects() { return m_objects; }
     const std::vector<SceneObject>& getObjects() const { return m_objects; }
@@ -215,6 +225,13 @@ class CADApp
     std::vector<SceneObject> m_objects;
     int m_selectedIndex{0};
     std::unique_ptr<rendering::MeshBuffer> m_gridMesh;
+
+    // 2D Sketch & Extrude state
+    bool m_sketchMode{false};
+    bool m_snapToGrid{true};
+    float m_extrudeHeight{1.2f};
+    std::vector<utils::math::Vec3f> m_sketchPoints;
+    std::unique_ptr<rendering::MeshBuffer> m_sketchLineMesh;
 
     // Sync per-frame
     uint32_t m_currentFrame{0};
