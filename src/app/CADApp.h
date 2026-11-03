@@ -47,6 +47,7 @@ struct SceneObject
     std::vector<utils::math::Vec3f> sketchPoints;
     utils::math::Vec3f position{0.0f, 0.0f, 0.0f};
     utils::math::Vec3f rotationDeg{0.0f, 0.0f, 0.0f};
+    utils::math::Vec3f scale{1.0f, 1.0f, 1.0f};
 
     std::unique_ptr<rendering::MeshBuffer> solidMesh;
     std::unique_ptr<rendering::MeshBuffer> wireframeMesh;
@@ -68,9 +69,10 @@ struct SceneObject
     {
         constexpr float degToRad = 3.14159265358979323846f / 180.0f;
         return utils::math::Mat4f::translation(position) *
-               utils::math::Mat4f::rotationY(rotationDeg.y * degToRad) *
                utils::math::Mat4f::rotationX(rotationDeg.x * degToRad) *
-               utils::math::Mat4f::rotationZ(rotationDeg.z * degToRad);
+               utils::math::Mat4f::rotationY(rotationDeg.y * degToRad) *
+               utils::math::Mat4f::rotationZ(rotationDeg.z * degToRad) *
+               utils::math::Mat4f::scaling(scale);
     }
 
     void updateAABB()
@@ -252,6 +254,31 @@ class CADApp
     // UI & Rendering
     void renderImGui();
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+
+    // Direct Numeric & Keypad helpers
+    bool drawNumericControl(const char* label, float* value, float step, float minVal, float maxVal,
+                            const char* format = "%.2f", std::function<void()> onChanged = nullptr);
+    bool drawVec3Control(const char* label, utils::math::Vec3f* vec, float step, float minVal,
+                         float maxVal, float resetVal = 0.0f,
+                         std::function<void()> onChanged = nullptr);
+    void openNumpad(const char* title, float* target, float minVal, float maxVal, float defaultVal,
+                    const char* format = "%.2f", std::function<void()> onChanged = nullptr);
+    void renderNumpadPopup();
+    void renderCompassGizmo();
+
+    // On-screen numeric keypad state
+    struct NumpadState
+    {
+        std::string title;
+        std::string inputBuffer;
+        float* targetValue{nullptr};
+        float minVal{-1e9f};
+        float maxVal{1e9f};
+        float defaultVal{0.0f};
+        std::function<void()> onChanged;
+    };
+    NumpadState m_numpad;
+    bool m_numpadNeedOpen{false};
 };
 
 }  // namespace app

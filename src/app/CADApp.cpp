@@ -657,6 +657,7 @@ bool CADApp::exportSTL()
 
         uint32_t baseIndex = static_cast<uint32_t>(combinedVertices.size());
         auto model = obj.getModelMatrix();
+        auto normalMatrix = model.inverted().transposed();
 
         for (const auto& v : obj.cpuVertices)
         {
@@ -668,7 +669,7 @@ bool CADApp::exportSTL()
             tv.position[2] = tPos.z;
 
             utils::math::Vec3f norm{v.normal[0], v.normal[1], v.normal[2]};
-            auto tNorm = model.transformDirection(norm).normalized();
+            auto tNorm = normalMatrix.transformDirection(norm).normalized();
             tv.normal[0] = tNorm.x;
             tv.normal[1] = tNorm.y;
             tv.normal[2] = tNorm.z;
@@ -786,8 +787,403 @@ void CADApp::initImGui(ANativeWindow* window)
     }
 }
 
+void CADApp::renderCompassGizmo()
+{
+    float screenW = static_cast<float>(getSwapchainExtentW());
+    if (screenW <= 0.0f)
+        return;
+
+    ImVec2 center(screenW - 110.0f, 130.0f);
+    float radius = 75.0f;
+
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+    if (!drawList)
+        return;
+
+    // Subtle translucent dark circle backing behind the compass
+    drawList->AddCircleFilled(center, radius + 15.0f, IM_COL32(14, 20, 32, 175));
+    drawList->AddCircle(center, radius + 15.0f, IM_COL32(70, 95, 130, 150), 32, 1.5f);
+    drawList->AddCircleFilled(center, 3.5f, IM_COL32(220, 220, 220, 230));
+
+    auto viewMat = m_camera.getViewMatrix();
+
+    struct AxisInfo
+    {
+        const char* label;
+        utils::math::Vec3f worldDir;
+        utils::math::Vec3f viewDir;
+        ImU32 color;
+        ImU32 textColor;
+        float tipRadius;
+        float lineThick;
+        bool isPositive;
+    };
+
+    std::vector<AxisInfo> axes = {
+        {"+X",
+         {1.0f, 0.0f, 0.0f},
+         {},
+         IM_COL32(245, 60, 60, 255),
+         IM_COL32(255, 255, 255, 255),
+         11.0f,
+         2.8f,
+         true},
+        {"-X",
+         {-1.0f, 0.0f, 0.0f},
+         {},
+         IM_COL32(140, 40, 40, 160),
+         IM_COL32(220, 180, 180, 200),
+         8.5f,
+         1.5f,
+         false},
+        {"+Y",
+         {0.0f, 1.0f, 0.0f},
+         {},
+         IM_COL32(50, 225, 70, 255),
+         IM_COL32(255, 255, 255, 255),
+         11.0f,
+         2.8f,
+         true},
+        {"-Y",
+         {0.0f, -1.0f, 0.0f},
+         {},
+         IM_COL32(35, 130, 45, 160),
+         IM_COL32(180, 220, 180, 200),
+         8.5f,
+         1.5f,
+         false},
+        {"+Z",
+         {0.0f, 0.0f, 1.0f},
+         {},
+         IM_COL32(65, 145, 255, 255),
+         IM_COL32(255, 255, 255, 255),
+         11.0f,
+         2.8f,
+         true},
+        {"-Z",
+         {0.0f, 0.0f, -1.0f},
+         {},
+         IM_COL32(35, 80, 160, 160),
+         IM_COL32(180, 200, 230, 200),
+         8.5f,
+         1.5f,
+         false},
+    };
+
+    for (auto& a : axes)
+    {
+        a.viewDir = viewMat.transformDirection(a.worldDir);
+    }
+
+    std::sort(axes.begin(), axes.end(),
+              [](const AxisInfo& a, const AxisInfo& b) { return a.viewDir.z < b.viewDir.z; });
+
+    for (const auto& a : axes)
+    {
+        ImVec2 tipPos(center.x + a.viewDir.x * radius, center.y - a.viewDir.y * radius);
+
+        drawList->AddLine(center, tipPos, a.color, a.lineThick);
+        drawList->AddCircleFilled(tipPos, a.tipRadius, a.color);
+        drawList->AddCircle(tipPos, a.tipRadius, IM_COL32(255, 255, 255, a.isPositive ? 200 : 100),
+                            16, 1.2f);
+
+        const char* labelText = a.isPositive ? (a.label + 1) : a.label;
+        ImVec2 txtSize = ImGui::CalcTextSize(labelText);
+        drawList->AddText(ImVec2(tipPos.x - txtSize.x * 0.5f, tipPos.y - txtSize.y * 0.5f),
+                          a.textColor, labelText);
+    }
+}
+
+void CADApp::openNumpad(const char* title, float* target, float minVal, float maxVal,
+                        float defaultVal, const char* format, std::function<void()> onChanged)
+{
+    m_numpad.title = title ? title : "Value";
+    m_numpad.targetValue = target;
+    m_numpad.minVal = minVal;
+    m_numpad.maxVal = maxVal;
+    m_numpad.defaultVal = defaultVal;
+    m_numpad.onChanged = std::move(onChanged);
+
+    char buf[64];
+    if (target)
+    {
+        snprintf(buf, sizeof(buf), format, *target);
+        m_numpad.inputBuffer = buf;
+    }
+    else
+    {
+        m_numpad.inputBuffer.clear();
+    }
+    m_numpadNeedOpen = true;
+}
+
+void CADApp::renderNumpadPopup()
+{
+    if (m_numpadNeedOpen)
+    {
+        ImGui::OpenPopup("Numeric Keypad");
+        m_numpadNeedOpen = false;
+    }
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("Numeric Keypad", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Set %s  [Range: %.1f to %.1f]", m_numpad.title.c_str(), m_numpad.minVal,
+                    m_numpad.maxVal);
+        ImGui::Separator();
+
+        // Large display box showing current typed input string
+        ImGui::BeginChild("NumpadDisplay", ImVec2(290.0f, 44.0f), true,
+                          ImGuiWindowFlags_NoScrollbar);
+        ImGui::SetWindowFontScale(1.3f);
+        ImGui::TextUnformatted(m_numpad.inputBuffer.empty() ? "0" : m_numpad.inputBuffer.c_str());
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::EndChild();
+
+        ImGui::Spacing();
+
+        // Keypad grid
+        float btnW = 64.0f;
+        float btnH = 46.0f;
+        ImVec2 btnSize(btnW, btnH);
+
+        auto appendChar = [&](char c)
+        {
+            if (c == '.')
+            {
+                if (m_numpad.inputBuffer.find('.') == std::string::npos)
+                {
+                    if (m_numpad.inputBuffer.empty())
+                        m_numpad.inputBuffer = "0.";
+                    else
+                        m_numpad.inputBuffer += '.';
+                }
+            }
+            else
+            {
+                if (m_numpad.inputBuffer == "0")
+                    m_numpad.inputBuffer.clear();
+                m_numpad.inputBuffer += c;
+            }
+        };
+
+        // Row 1: 7, 8, 9, Backspace
+        if (ImGui::Button("7", btnSize))
+            appendChar('7');
+        ImGui::SameLine();
+        if (ImGui::Button("8", btnSize))
+            appendChar('8');
+        ImGui::SameLine();
+        if (ImGui::Button("9", btnSize))
+            appendChar('9');
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.25f, 0.25f, 1.0f));
+        if (ImGui::Button("<-", btnSize))
+        {
+            if (!m_numpad.inputBuffer.empty())
+                m_numpad.inputBuffer.pop_back();
+        }
+        ImGui::PopStyleColor();
+
+        // Row 2: 4, 5, 6, Clear
+        if (ImGui::Button("4", btnSize))
+            appendChar('4');
+        ImGui::SameLine();
+        if (ImGui::Button("5", btnSize))
+            appendChar('5');
+        ImGui::SameLine();
+        if (ImGui::Button("6", btnSize))
+            appendChar('6');
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.25f, 0.25f, 1.0f));
+        if (ImGui::Button("C", btnSize))
+        {
+            m_numpad.inputBuffer.clear();
+        }
+        ImGui::PopStyleColor();
+
+        // Row 3: 1, 2, 3, +/-
+        if (ImGui::Button("1", btnSize))
+            appendChar('1');
+        ImGui::SameLine();
+        if (ImGui::Button("2", btnSize))
+            appendChar('2');
+        ImGui::SameLine();
+        if (ImGui::Button("3", btnSize))
+            appendChar('3');
+        ImGui::SameLine();
+        if (ImGui::Button("+/-", btnSize))
+        {
+            if (!m_numpad.inputBuffer.empty() && m_numpad.inputBuffer[0] == '-')
+                m_numpad.inputBuffer.erase(0, 1);
+            else if (!m_numpad.inputBuffer.empty() && m_numpad.inputBuffer != "0")
+                m_numpad.inputBuffer.insert(0, "-");
+        }
+
+        // Row 4: 0, ., Reset
+        float zeroW = btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+        if (ImGui::Button("0", ImVec2(zeroW, btnH)))
+            appendChar('0');
+        ImGui::SameLine();
+        if (ImGui::Button(".", btnSize))
+            appendChar('.');
+        ImGui::SameLine();
+        if (ImGui::Button("Rst", btnSize))
+        {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.2f", m_numpad.defaultVal);
+            m_numpad.inputBuffer = buf;
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Bottom action buttons: Apply and Cancel
+        float actionBtnW =
+            (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.65f, 0.28f, 1.0f));
+        if (ImGui::Button("Apply", ImVec2(actionBtnW, 44.0f)))
+        {
+            if (m_numpad.targetValue)
+            {
+                try
+                {
+                    if (!m_numpad.inputBuffer.empty())
+                    {
+                        float val = std::stof(m_numpad.inputBuffer);
+                        if (val < m_numpad.minVal)
+                            val = m_numpad.minVal;
+                        if (val > m_numpad.maxVal)
+                            val = m_numpad.maxVal;
+                        *m_numpad.targetValue = val;
+                        if (m_numpad.onChanged)
+                            m_numpad.onChanged();
+                    }
+                }
+                catch (...)
+                {
+                }
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor();
+
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(actionBtnW, 44.0f)))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+}
+
+bool CADApp::drawNumericControl(const char* label, float* value, float step, float minVal,
+                                float maxVal, const char* format, std::function<void()> onChanged)
+{
+    bool changed = false;
+    ImGui::PushID(label);
+
+    ImGui::Text("%s", label);
+
+    float availW = ImGui::GetContentRegionAvail().x;
+    float btnW = 42.0f;
+    float padBtnW = 42.0f;
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float centerW = availW - (2.0f * btnW + padBtnW + 3.0f * spacing);
+    if (centerW < 70.0f)
+        centerW = 70.0f;
+
+    // 1. [-] hold-repeat button
+    ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
+    if (ImGui::Button("-##dec", ImVec2(btnW, 0.0f)))
+    {
+        *value -= step;
+        if (*value < minVal)
+            *value = minVal;
+        changed = true;
+    }
+    ImGui::PopItemFlag();
+
+    ImGui::SameLine();
+
+    // 2. Center Slider
+    ImGui::SetNextItemWidth(centerW);
+    if (ImGui::SliderFloat("##val", value, minVal, maxVal, format))
+    {
+        changed = true;
+    }
+
+    ImGui::SameLine();
+
+    // 3. [+] hold-repeat button
+    ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
+    if (ImGui::Button("+##inc", ImVec2(btnW, 0.0f)))
+    {
+        *value += step;
+        if (*value > maxVal)
+            *value = maxVal;
+        changed = true;
+    }
+    ImGui::PopItemFlag();
+
+    ImGui::SameLine();
+
+    // 4. [#] Direct keypad entry button
+    if (ImGui::Button("###numpad", ImVec2(padBtnW, 0.0f)))
+    {
+        openNumpad(label, value, minVal, maxVal, *value, format, onChanged);
+    }
+
+    ImGui::PopID();
+
+    if (changed && onChanged)
+    {
+        onChanged();
+    }
+    return changed;
+}
+
+bool CADApp::drawVec3Control(const char* label, utils::math::Vec3f* vec, float step, float minVal,
+                             float maxVal, float resetVal, std::function<void()> onChanged)
+{
+    bool changed = false;
+    ImGui::PushID(label);
+
+    ImGui::Text("%s:", label);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset"))
+    {
+        vec->x = resetVal;
+        vec->y = resetVal;
+        vec->z = resetVal;
+        changed = true;
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
+    changed |= drawNumericControl("X", &vec->x, step, minVal, maxVal, "%.2f", onChanged);
+    ImGui::PopStyleColor();
+
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 1.0f, 0.45f, 1.0f));
+    changed |= drawNumericControl("Y", &vec->y, step, minVal, maxVal, "%.2f", onChanged);
+    ImGui::PopStyleColor();
+
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.65f, 1.0f, 1.0f));
+    changed |= drawNumericControl("Z", &vec->z, step, minVal, maxVal, "%.2f", onChanged);
+    ImGui::PopStyleColor();
+
+    ImGui::PopID();
+    return changed;
+}
+
 void CADApp::renderImGui()
 {
+    renderCompassGizmo();
+
     ImGui::SetNextWindowPos(ImVec2(30.0f, 30.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(0.88f);
     if (ImGui::Begin("MobileCAD Studio", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
@@ -873,6 +1269,7 @@ void CADApp::renderImGui()
                     dup.sketchPoints = src.sketchPoints;
                     dup.position = src.position + utils::math::Vec3f(0.8f, 0.0f, 0.8f);
                     dup.rotationDeg = src.rotationDeg;
+                    dup.scale = src.scale;
                     m_objects.push_back(std::move(dup));
                     m_selectedIndex = static_cast<int>(m_objects.size() - 1);
                     rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
@@ -881,11 +1278,14 @@ void CADApp::renderImGui()
             ImGui::SameLine();
             if (ImGui::Button("Delete"))
             {
-                if (m_objects.size() > 1 && m_selectedIndex >= 0 &&
-                    m_selectedIndex < static_cast<int>(m_objects.size()))
+                if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
                 {
                     m_objects.erase(m_objects.begin() + m_selectedIndex);
-                    if (m_selectedIndex >= static_cast<int>(m_objects.size()))
+                    if (m_objects.empty())
+                    {
+                        m_selectedIndex = -1;
+                    }
+                    else if (m_selectedIndex >= static_cast<int>(m_objects.size()))
                     {
                         m_selectedIndex = static_cast<int>(m_objects.size()) - 1;
                     }
@@ -915,6 +1315,10 @@ void CADApp::renderImGui()
                     ImGui::EndCombo();
                 }
             }
+            else
+            {
+                ImGui::TextDisabled("(Scene is empty — tap [+ Add Part] or 2D Sketch)");
+            }
         }
 
         // 4. 2D Sketch & Extrude Section
@@ -941,7 +1345,7 @@ void CADApp::renderImGui()
                 clearSketch();
             }
 
-            ImGui::SliderFloat("Extrude Height", &m_extrudeHeight, 0.2f, 4.0f, "%.2f");
+            drawNumericControl("Extrude Height", &m_extrudeHeight, 0.05f, 0.2f, 4.0f, "%.2f");
 
             bool canExtrude = (m_sketchPoints.size() >= 3);
             if (!canExtrude)
@@ -965,13 +1369,20 @@ void CADApp::renderImGui()
 
             if (ImGui::CollapsingHeader("Transform Inspector", ImGuiTreeNodeFlags_DefaultOpen))
             {
-                ImGui::SliderFloat3("Position", &obj.position.x, -5.0f, 5.0f, "%.2f");
-                ImGui::SliderFloat3("Rotate (deg)", &obj.rotationDeg.x, -180.0f, 180.0f, "%.1f");
+                drawVec3Control("Position", &obj.position, 0.05f, -5.0f, 5.0f, 0.0f);
+                drawVec3Control("Rotate (deg)", &obj.rotationDeg, 1.0f, -180.0f, 180.0f, 0.0f);
+                drawVec3Control("Scale", &obj.scale, 0.05f, 0.05f, 10.0f, 1.0f);
             }
 
             if (ImGui::CollapsingHeader("Parameters & CSG", ImGuiTreeNodeFlags_DefaultOpen))
             {
                 bool changed = false;
+                auto onGeomChanged = [this]()
+                {
+                    if (m_selectedIndex >= 0 &&
+                        m_selectedIndex < static_cast<int>(m_objects.size()))
+                        rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                };
 
                 const char* csgItems[] = {"Solid Primitive", "Subtract (Drill Hole)",
                                           "Union (Boss Hub)", "Intersect (Box ^ Sphere)",
@@ -987,8 +1398,8 @@ void CADApp::renderImGui()
                     {
                         ImGui::Text("Extruded Solid Part (%zu sketch points)",
                                     obj.sketchPoints.size());
-                        changed |= ImGui::SliderFloat("Extrude Height", &obj.params.height, 0.2f,
-                                                      4.0f, "%.2f");
+                        changed |= drawNumericControl("Extrude Height", &obj.params.height, 0.05f,
+                                                      0.2f, 4.0f, "%.2f", onGeomChanged);
                     }
                     else
                     {
@@ -1015,27 +1426,41 @@ void CADApp::renderImGui()
                     }
                 }
 
-                // Parametric Sliders
+                // Parametric Steppers with direct numpad
                 if (obj.primitiveType == PrimitiveType::Box || obj.params.csgMode > 0)
                 {
-                    changed |= ImGui::SliderFloat("Width", &obj.params.width, 0.2f, 4.0f, "%.2f");
-                    changed |= ImGui::SliderFloat("Height", &obj.params.height, 0.2f, 4.0f, "%.2f");
-                    changed |= ImGui::SliderFloat("Depth", &obj.params.depth, 0.2f, 4.0f, "%.2f");
+                    changed |= drawNumericControl("Width", &obj.params.width, 0.05f, 0.2f, 4.0f,
+                                                  "%.2f", onGeomChanged);
+                    changed |= drawNumericControl("Height", &obj.params.height, 0.05f, 0.2f, 4.0f,
+                                                  "%.2f", onGeomChanged);
+                    changed |= drawNumericControl("Depth", &obj.params.depth, 0.05f, 0.2f, 4.0f,
+                                                  "%.2f", onGeomChanged);
                 }
                 if (obj.primitiveType == PrimitiveType::Cylinder ||
                     obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
                 {
-                    changed |= ImGui::SliderFloat("Radius", &obj.params.radius, 0.1f, 2.0f, "%.2f");
+                    changed |= drawNumericControl("Radius", &obj.params.radius, 0.05f, 0.1f, 2.0f,
+                                                  "%.2f", onGeomChanged);
                 }
                 if (obj.params.csgMode == 1 || obj.params.csgMode == 4)
                 {
-                    changed |= ImGui::SliderFloat("Hole Radius", &obj.params.holeRadius, 0.05f,
-                                                  1.8f, "%.2f");
+                    changed |= drawNumericControl("Hole Radius", &obj.params.holeRadius, 0.02f,
+                                                  0.05f, 1.8f, "%.2f", onGeomChanged);
                 }
                 if (obj.primitiveType == PrimitiveType::Cylinder ||
                     obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
                 {
-                    changed |= ImGui::SliderInt("Segments", &obj.params.segments, 8, 64);
+                    float segs = static_cast<float>(obj.params.segments);
+                    if (drawNumericControl("Segments", &segs, 2.0f, 8.0f, 64.0f, "%.0f",
+                                           [&obj, &segs, onGeomChanged]()
+                                           {
+                                               obj.params.segments = static_cast<int>(segs);
+                                               onGeomChanged();
+                                           }))
+                    {
+                        obj.params.segments = static_cast<int>(segs);
+                        changed = true;
+                    }
                 }
 
                 if (changed)
@@ -1108,6 +1533,8 @@ void CADApp::renderImGui()
         }
     }
     ImGui::End();
+
+    renderNumpadPopup();
 }
 
 void CADApp::cleanupSwapchain()
@@ -1602,7 +2029,8 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
                 continue;
 
             auto model = obj.getModelMatrix();
-            PushConstantData pcData{viewProj * model, model};
+            auto normalMatrix = model.inverted().transposed();
+            PushConstantData pcData{viewProj * model, normalMatrix};
             VkBuffer vertexBuffers[] = {obj.solidMesh->getVertexBuffer()};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
@@ -1642,7 +2070,8 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
             continue;
 
         auto model = obj.getModelMatrix();
-        PushConstantData pcData{viewProj * model, model};
+        auto normalMatrix = model.inverted().transposed();
+        PushConstantData pcData{viewProj * model, normalMatrix};
         VkBuffer vertexBuffers[] = {meshToDraw->getVertexBuffer()};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
