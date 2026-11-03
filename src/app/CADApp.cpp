@@ -502,8 +502,10 @@ void CADApp::rebuildObjectGeometry(size_t index)
                                     .Translate({0.0, obj.params.radius, 0.0});
             break;
         case PrimitiveType::Extrude:
-            data = geometry::Primitives::createExtrudedPolygon(obj.sketchPoints, obj.params.height);
-            if (obj.sketchPoints.size() >= 3)
+            data = geometry::Primitives::createExtrudedPolygon(
+                obj.sketchPoints, obj.params.height, obj.params.bevelWidth,
+                obj.params.bevelSegments, &obj.localManifold);
+            if (obj.localManifold.IsEmpty() && obj.sketchPoints.size() >= 3)
             {
                 manifold::SimplePolygon poly;
                 poly.reserve(obj.sketchPoints.size());
@@ -663,26 +665,37 @@ void CADApp::rebuildSketchMesh()
                              {crossColor[0], crossColor[1], crossColor[2]}});
     }
 
-    // 2. Line segments connecting consecutive points in bright Cyan
-    const float cyan[3] = {0.0f, 0.95f, 1.0f};
-    for (size_t i = 0; i + 1 < n; ++i)
+    // 2. Line segments connecting consecutive points (spline interpolated for SmoothCurve)
+    std::vector<utils::math::Vec3f> renderPts;
+    if (m_sketchTool == SketchTool::SmoothCurve && n >= 3)
     {
-        lineVerts.push_back({{m_sketchPoints[i].x, 0.006f, m_sketchPoints[i].z},
+        renderPts = geometry::Primitives::evaluateClosedCatmullRom(m_sketchPoints, 8);
+    }
+    else
+    {
+        renderPts = m_sketchPoints;
+    }
+
+    size_t rn = renderPts.size();
+    const float cyan[3] = {0.0f, 0.95f, 1.0f};
+    for (size_t i = 0; i + 1 < rn; ++i)
+    {
+        lineVerts.push_back({{renderPts[i].x, 0.006f, renderPts[i].z},
                              {0.0f, 0.0f, 0.0f},
                              {cyan[0], cyan[1], cyan[2]}});
-        lineVerts.push_back({{m_sketchPoints[i + 1].x, 0.006f, m_sketchPoints[i + 1].z},
+        lineVerts.push_back({{renderPts[i + 1].x, 0.006f, renderPts[i + 1].z},
                              {0.0f, 0.0f, 0.0f},
                              {cyan[0], cyan[1], cyan[2]}});
     }
 
     // 3. Closing segment in Yellow/Green if >= 3 points
-    if (n >= 3)
+    if (rn >= 3)
     {
         const float yellowGreen[3] = {1.0f, 0.90f, 0.20f};
-        lineVerts.push_back({{m_sketchPoints[n - 1].x, 0.006f, m_sketchPoints[n - 1].z},
+        lineVerts.push_back({{renderPts[rn - 1].x, 0.006f, renderPts[rn - 1].z},
                              {0.0f, 0.0f, 0.0f},
                              {yellowGreen[0], yellowGreen[1], yellowGreen[2]}});
-        lineVerts.push_back({{m_sketchPoints[0].x, 0.006f, m_sketchPoints[0].z},
+        lineVerts.push_back({{renderPts[0].x, 0.006f, renderPts[0].z},
                              {0.0f, 0.0f, 0.0f},
                              {yellowGreen[0], yellowGreen[1], yellowGreen[2]}});
     }
@@ -714,7 +727,18 @@ void CADApp::extrudeSketchToPart()
     newObj.name = "Extrude_" + std::to_string(m_objects.size() + 1);
     newObj.primitiveType = PrimitiveType::Extrude;
     newObj.params.height = m_extrudeHeight;
-    newObj.sketchPoints = m_sketchPoints;
+    newObj.params.bevelWidth = m_bevelWidth;
+    newObj.params.bevelSegments = m_bevelSegments;
+
+    if (m_sketchTool == SketchTool::SmoothCurve && m_sketchPoints.size() >= 3)
+    {
+        newObj.sketchPoints = geometry::Primitives::evaluateClosedCatmullRom(m_sketchPoints, 8);
+    }
+    else
+    {
+        newObj.sketchPoints = m_sketchPoints;
+    }
+
     newObj.position = {0.0f, 0.0f, 0.0f};
     newObj.rotationDeg = {0.0f, 0.0f, 0.0f};
     newObj.isSelected = true;
@@ -728,7 +752,8 @@ void CADApp::extrudeSketchToPart()
     m_sketchLineMesh.reset();
     m_sketchMode = false;
 
-    LOGI("Extruded sketch profile to 3D Part: %s", m_objects[m_selectedIndex].name.c_str());
+    LOGI("Extruded sketch profile to 3D Part: %s (height=%.2f, bevelWidth=%.2f, bevelSteps=%d)",
+         m_objects[m_selectedIndex].name.c_str(), m_extrudeHeight, m_bevelWidth, m_bevelSegments);
 }
 
 void CADApp::setPrimitive(PrimitiveType type)
@@ -2044,11 +2069,67 @@ void CADApp::renderImGui()
             // 4. 2D Sketch & Extrude Section
             if (ImGui::CollapsingHeader("2D Sketch & Extrude"))
             {
-                ImGui::Checkbox("2D Sketch Mode (Tap Ground Plane)", &m_sketchMode);
+                ImGui::Checkbox("2D Sketch Mode (Tap/Draw Ground)", &m_sketchMode);
                 ImGui::SameLine();
-                if (ImGui::Button("Snap View to Top"))
+                if (ImGui::Button("Top View"))
                 {
                     m_camera.setViewTop();
+                }
+
+                const char* toolNames[] = {
+                    "Polyline (Tap)",     "Freehand (S-Pen Drag)", "Smooth Curve (Spline)",
+                    "Wave (Sine Ribbon)", "Circle (Stamp)",        "Ellipse (Stamp)",
+                    "Square (Stamp)",     "Rectangle (Stamp)",     "Triangle (Stamp)"};
+                int currentTool = static_cast<int>(m_sketchTool);
+                if (ImGui::Combo("Tool", &currentTool, toolNames, IM_ARRAYSIZE(toolNames)))
+                {
+                    m_sketchTool = static_cast<SketchTool>(currentTool);
+                    rebuildSketchMesh();
+                }
+
+                if (m_sketchTool == SketchTool::Freehand)
+                {
+                    ImGui::TextColored(ImVec4(0.40f, 1.0f, 0.50f, 1.0f),
+                                       "S-Pen / Finger: Drag on ground plane to draw!");
+                }
+                else if (m_sketchTool >= SketchTool::Circle || m_sketchTool == SketchTool::Wave)
+                {
+                    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.35f, 1.0f),
+                                       "Tap ground plane to stamp shape at coordinate");
+                    if (ImGui::Button("Stamp Shape at Origin (0,0)", ImVec2(-1.0f, 0.0f)))
+                    {
+                        switch (m_sketchTool)
+                        {
+                        case SketchTool::Circle:
+                            m_sketchPoints = geometry::Primitives::create2DCircle(
+                                0.0f, 0.0f, m_sketchDimX * 0.5f, m_sketchSegments);
+                            break;
+                        case SketchTool::Ellipse:
+                            m_sketchPoints = geometry::Primitives::create2DEllipse(
+                                0.0f, 0.0f, m_sketchDimX * 0.5f, m_sketchDimZ * 0.5f,
+                                m_sketchSegments);
+                            break;
+                        case SketchTool::Square:
+                            m_sketchPoints =
+                                geometry::Primitives::create2DSquare(0.0f, 0.0f, m_sketchDimX);
+                            break;
+                        case SketchTool::Rectangle:
+                            m_sketchPoints = geometry::Primitives::create2DRectangle(
+                                0.0f, 0.0f, m_sketchDimX, m_sketchDimZ);
+                            break;
+                        case SketchTool::Triangle:
+                            m_sketchPoints = geometry::Primitives::create2DTriangle(
+                                0.0f, 0.0f, m_sketchDimX, m_sketchDimZ);
+                            break;
+                        case SketchTool::Wave:
+                            m_sketchPoints = geometry::Primitives::create2DWave(
+                                0.0f, 0.0f, m_sketchDimX, m_sketchDimZ, m_sketchSegments);
+                            break;
+                        default:
+                            break;
+                        }
+                        rebuildSketchMesh();
+                    }
                 }
 
                 ImGui::Checkbox("Snap to 0.25 Grid", &m_snapToGrid);
@@ -2065,7 +2146,24 @@ void CADApp::renderImGui()
                     clearSketch();
                 }
 
+                if (m_sketchTool >= SketchTool::Circle || m_sketchTool == SketchTool::Wave)
+                {
+                    drawNumericControl("Shape Width / RadX", &m_sketchDimX, 0.1f, 0.2f, 10.0f,
+                                       "%.2f");
+                    drawNumericControl("Shape Depth / RadZ", &m_sketchDimZ, 0.1f, 0.2f, 10.0f,
+                                       "%.2f");
+                }
+
                 drawNumericControl("Extrude Height", &m_extrudeHeight, 0.05f, 0.2f, 4.0f, "%.2f");
+                drawNumericControl("Bevel / Chamfer Width", &m_bevelWidth, 0.02f, 0.0f, 0.50f,
+                                   "%.2f");
+
+                float bevelStepsF = static_cast<float>(m_bevelSegments);
+                if (drawNumericControl("Bevel Steps (1=Chamf, 2-5=Round)", &bevelStepsF, 1.0f, 1.0f,
+                                       5.0f, "%.0f"))
+                {
+                    m_bevelSegments = static_cast<int>(bevelStepsF);
+                }
 
                 bool canExtrude = (m_sketchPoints.size() >= 3);
                 if (!canExtrude)
@@ -2132,6 +2230,16 @@ void CADApp::renderImGui()
                                 changed |=
                                     drawNumericControl("Extrude Height", &obj.params.height, 0.05f,
                                                        0.2f, 4.0f, "%.2f", onGeomChanged);
+                                changed |=
+                                    drawNumericControl("Bevel Width", &obj.params.bevelWidth, 0.02f,
+                                                       0.0f, 0.50f, "%.2f", onGeomChanged);
+                                float stepsF = static_cast<float>(obj.params.bevelSegments);
+                                if (drawNumericControl("Bevel Steps (1=Chamf, 2-5=Round)", &stepsF,
+                                                       1.0f, 1.0f, 5.0f, "%.0f", onGeomChanged))
+                                {
+                                    obj.params.bevelSegments = static_cast<int>(stepsF);
+                                    changed = true;
+                                }
                             }
                             else
                             {
@@ -2387,6 +2495,42 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
         m_lastTouchX = x0;
         m_lastTouchY = y0;
         m_lastPinchDist = 0.0f;
+
+        if (m_sketchMode && m_sketchTool == SketchTool::Freehand && m_swapchain)
+        {
+            float screenW = static_cast<float>(getSwapchainExtentW());
+            float screenH = static_cast<float>(getSwapchainExtentH());
+            if (screenW > 0.0f && screenH > 0.0f)
+            {
+                float aspect = screenW / screenH;
+                auto viewProj = m_camera.getViewProjectionMatrix(aspect);
+                auto ray = utils::math::Ray::screenPointToRay(x0, y0, screenW, screenH, viewProj);
+                if (std::abs(ray.dir.y) > 1e-4f)
+                {
+                    float t = -ray.origin.y / ray.dir.y;
+                    if (t > 0.0f)
+                    {
+                        float hitX = ray.origin.x + t * ray.dir.x;
+                        float hitZ = ray.origin.z + t * ray.dir.z;
+                        if (m_sketchPoints.empty())
+                        {
+                            m_sketchPoints.push_back({hitX, 0.005f, hitZ});
+                            rebuildSketchMesh();
+                        }
+                        else
+                        {
+                            float dx = hitX - m_sketchPoints.back().x;
+                            float dz = hitZ - m_sketchPoints.back().z;
+                            if (std::hypot(dx, dz) >= 0.10f)
+                            {
+                                m_sketchPoints.push_back({hitX, 0.005f, hitZ});
+                                rebuildSketchMesh();
+                            }
+                        }
+                    }
+                }
+            }
+        }
         return;
     }
 
@@ -2432,13 +2576,77 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
                                 hitX = std::round(hitX / 0.25f) * 0.25f;
                                 hitZ = std::round(hitZ / 0.25f) * 0.25f;
                             }
-                            m_sketchPoints.push_back({hitX, 0.005f, hitZ});
-                            rebuildSketchMesh();
-                            LOGI(
-                                "Sketch tap at (%.1f, %.1f) -> placed point (%.2f, 0.005, "
-                                "%.2f) "
-                                "[total %zu pts]",
-                                x0, y0, hitX, hitZ, m_sketchPoints.size());
+
+                            switch (m_sketchTool)
+                            {
+                            case SketchTool::Polyline:
+                            case SketchTool::SmoothCurve:
+                                m_sketchPoints.push_back({hitX, 0.005f, hitZ});
+                                rebuildSketchMesh();
+                                LOGI("Sketch tap -> placed point (%.2f, 0.005, %.2f) [%zu pts]",
+                                     hitX, hitZ, m_sketchPoints.size());
+                                break;
+                            case SketchTool::Freehand:
+                                if (m_sketchPoints.empty())
+                                {
+                                    m_sketchPoints.push_back({hitX, 0.005f, hitZ});
+                                    rebuildSketchMesh();
+                                }
+                                else
+                                {
+                                    float dx = hitX - m_sketchPoints.back().x;
+                                    float dz = hitZ - m_sketchPoints.back().z;
+                                    if (std::hypot(dx, dz) >= 0.10f)
+                                    {
+                                        m_sketchPoints.push_back({hitX, 0.005f, hitZ});
+                                        rebuildSketchMesh();
+                                    }
+                                }
+                                break;
+                            case SketchTool::Circle:
+                                m_sketchPoints = geometry::Primitives::create2DCircle(
+                                    hitX, hitZ, m_sketchDimX * 0.5f, m_sketchSegments);
+                                rebuildSketchMesh();
+                                LOGI("Stamped Circle at (%.2f, %.2f) rad=%.2f", hitX, hitZ,
+                                     m_sketchDimX * 0.5f);
+                                break;
+                            case SketchTool::Ellipse:
+                                m_sketchPoints = geometry::Primitives::create2DEllipse(
+                                    hitX, hitZ, m_sketchDimX * 0.5f, m_sketchDimZ * 0.5f,
+                                    m_sketchSegments);
+                                rebuildSketchMesh();
+                                LOGI("Stamped Ellipse at (%.2f, %.2f) rx=%.2f, rz=%.2f", hitX, hitZ,
+                                     m_sketchDimX * 0.5f, m_sketchDimZ * 0.5f);
+                                break;
+                            case SketchTool::Square:
+                                m_sketchPoints =
+                                    geometry::Primitives::create2DSquare(hitX, hitZ, m_sketchDimX);
+                                rebuildSketchMesh();
+                                LOGI("Stamped Square at (%.2f, %.2f) side=%.2f", hitX, hitZ,
+                                     m_sketchDimX);
+                                break;
+                            case SketchTool::Rectangle:
+                                m_sketchPoints = geometry::Primitives::create2DRectangle(
+                                    hitX, hitZ, m_sketchDimX, m_sketchDimZ);
+                                rebuildSketchMesh();
+                                LOGI("Stamped Rectangle at (%.2f, %.2f) w=%.2f, d=%.2f", hitX, hitZ,
+                                     m_sketchDimX, m_sketchDimZ);
+                                break;
+                            case SketchTool::Triangle:
+                                m_sketchPoints = geometry::Primitives::create2DTriangle(
+                                    hitX, hitZ, m_sketchDimX, m_sketchDimZ);
+                                rebuildSketchMesh();
+                                LOGI("Stamped Triangle at (%.2f, %.2f) base=%.2f, h=%.2f", hitX,
+                                     hitZ, m_sketchDimX, m_sketchDimZ);
+                                break;
+                            case SketchTool::Wave:
+                                m_sketchPoints = geometry::Primitives::create2DWave(
+                                    hitX, hitZ, m_sketchDimX, m_sketchDimZ, m_sketchSegments);
+                                rebuildSketchMesh();
+                                LOGI("Stamped Wave at (%.2f, %.2f) len=%.2f, amp=%.2f", hitX, hitZ,
+                                     m_sketchDimX, m_sketchDimZ * 0.3f);
+                                break;
+                            }
                         }
                     }
                 }
@@ -2539,6 +2747,46 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
         {
             float drag = std::hypot(x0 - m_downX, y0 - m_downY);
             m_maxDragDist = std::max(m_maxDragDist, drag);
+
+            if (m_sketchMode && m_sketchTool == SketchTool::Freehand && m_swapchain)
+            {
+                float screenW = static_cast<float>(getSwapchainExtentW());
+                float screenH = static_cast<float>(getSwapchainExtentH());
+                if (screenW > 0.0f && screenH > 0.0f)
+                {
+                    float aspect = screenW / screenH;
+                    auto viewProj = m_camera.getViewProjectionMatrix(aspect);
+                    auto ray =
+                        utils::math::Ray::screenPointToRay(x0, y0, screenW, screenH, viewProj);
+                    if (std::abs(ray.dir.y) > 1e-4f)
+                    {
+                        float t = -ray.origin.y / ray.dir.y;
+                        if (t > 0.0f)
+                        {
+                            float hitX = ray.origin.x + t * ray.dir.x;
+                            float hitZ = ray.origin.z + t * ray.dir.z;
+                            if (m_sketchPoints.empty())
+                            {
+                                m_sketchPoints.push_back({hitX, 0.005f, hitZ});
+                                rebuildSketchMesh();
+                            }
+                            else
+                            {
+                                float dx = hitX - m_sketchPoints.back().x;
+                                float dz = hitZ - m_sketchPoints.back().z;
+                                if (std::hypot(dx, dz) >= 0.10f)
+                                {
+                                    m_sketchPoints.push_back({hitX, 0.005f, hitZ});
+                                    rebuildSketchMesh();
+                                }
+                            }
+                        }
+                    }
+                }
+                m_lastTouchX = x0;
+                m_lastTouchY = y0;
+                return;
+            }
 
             float dx = x0 - m_lastTouchX;
             float dy = y0 - m_lastTouchY;

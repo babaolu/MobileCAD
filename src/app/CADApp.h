@@ -30,6 +30,19 @@ enum class PrimitiveType
     Extrude
 };
 
+enum class SketchTool : int
+{
+    Polyline = 0,
+    Freehand = 1,
+    SmoothCurve = 2,
+    Wave = 3,
+    Circle = 4,
+    Ellipse = 5,
+    Square = 6,
+    Rectangle = 7,
+    Triangle = 8
+};
+
 struct PrimitiveParams
 {
     float width{1.6f};
@@ -40,6 +53,8 @@ struct PrimitiveParams
     int segments{32};
     int csgMode{
         0};  // 0 = Solid, 1 = Drill Hole, 2 = Union, 3 = Intersect, 4 = Hollow Pipe, -1 = Baked CSG
+    float bevelWidth{0.0f};
+    int bevelSegments{1};
 };
 
 struct SceneObject
@@ -321,7 +336,13 @@ class CADApp
     // 2D Sketch & Extrude state
     bool m_sketchMode{false};
     bool m_snapToGrid{true};
+    SketchTool m_sketchTool{SketchTool::Polyline};
+    float m_sketchDimX{1.6f};
+    float m_sketchDimZ{1.2f};
+    int m_sketchSegments{32};
     float m_extrudeHeight{1.2f};
+    float m_bevelWidth{0.0f};
+    int m_bevelSegments{1};
     std::vector<utils::math::Vec3f> m_sketchPoints;
     std::unique_ptr<rendering::MeshBuffer> m_sketchLineMesh;
 

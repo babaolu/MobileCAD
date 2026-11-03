@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -379,21 +380,153 @@ class Primitives
         return fromManifold(result, cyan);
     }
 
-    // 8. 2D Sketch Extrusion (Ear-Clipping triangulation of polygon on XZ plane extruded to Y =
-    // height)
-    static MeshData createExtrudedPolygon(const std::vector<utils::math::Vec3f>& sketchPts,
-                                          float height = 1.2f)
+    // 8. 2D Parametric Profile Generators & Spline Interpolation
+    static std::vector<utils::math::Vec3f> create2DCircle(float cx, float cz, float radius,
+                                                          int segments = 32)
+    {
+        std::vector<utils::math::Vec3f> pts;
+        if (segments < 3)
+            segments = 3;
+        pts.reserve(segments);
+        const float twoPi = 6.28318530718f;
+        for (int i = 0; i < segments; ++i)
+        {
+            float theta = twoPi * static_cast<float>(i) / static_cast<float>(segments);
+            pts.push_back({cx + radius * std::cos(theta), 0.005f, cz + radius * std::sin(theta)});
+        }
+        return pts;
+    }
+
+    static std::vector<utils::math::Vec3f> create2DEllipse(float cx, float cz, float rx, float rz,
+                                                           int segments = 32)
+    {
+        std::vector<utils::math::Vec3f> pts;
+        if (segments < 3)
+            segments = 3;
+        pts.reserve(segments);
+        const float twoPi = 6.28318530718f;
+        for (int i = 0; i < segments; ++i)
+        {
+            float theta = twoPi * static_cast<float>(i) / static_cast<float>(segments);
+            pts.push_back({cx + rx * std::cos(theta), 0.005f, cz + rz * std::sin(theta)});
+        }
+        return pts;
+    }
+
+    static std::vector<utils::math::Vec3f> create2DSquare(float cx, float cz, float side)
+    {
+        float h = side * 0.5f;
+        return {{cx - h, 0.005f, cz - h},
+                {cx + h, 0.005f, cz - h},
+                {cx + h, 0.005f, cz + h},
+                {cx - h, 0.005f, cz + h}};
+    }
+
+    static std::vector<utils::math::Vec3f> create2DRectangle(float cx, float cz, float width,
+                                                             float depth)
+    {
+        float hw = width * 0.5f;
+        float hd = depth * 0.5f;
+        return {{cx - hw, 0.005f, cz - hd},
+                {cx + hw, 0.005f, cz - hd},
+                {cx + hw, 0.005f, cz + hd},
+                {cx - hw, 0.005f, cz + hd}};
+    }
+
+    static std::vector<utils::math::Vec3f> create2DTriangle(float cx, float cz, float baseW,
+                                                            float heightH)
+    {
+        float hw = baseW * 0.5f;
+        float hh = heightH * 0.5f;
+        return {{cx - hw, 0.005f, cz - hh}, {cx + hw, 0.005f, cz - hh}, {cx, 0.005f, cz + hh}};
+    }
+
+    static std::vector<utils::math::Vec3f> create2DWave(float cx, float cz, float length,
+                                                        float depth, int segments = 32)
+    {
+        std::vector<utils::math::Vec3f> pts;
+        int nHalf = std::max(8, segments / 2);
+        pts.reserve(nHalf * 2 + 2);
+
+        float halfL = length * 0.5f;
+        float thickness = 0.4f;
+        float amp = depth * 0.3f;
+        const float twoPi = 6.28318530718f;
+
+        // Top edge: from -halfL to +halfL
+        for (int i = 0; i <= nHalf; ++i)
+        {
+            float u = static_cast<float>(i) / static_cast<float>(nHalf);
+            float x = cx - halfL + u * length;
+            float z = cz + amp * std::sin(twoPi * 2.0f * u) + thickness * 0.5f;
+            pts.push_back({x, 0.005f, z});
+        }
+
+        // Bottom edge: from +halfL back to -halfL
+        for (int i = nHalf; i >= 0; --i)
+        {
+            float u = static_cast<float>(i) / static_cast<float>(nHalf);
+            float x = cx - halfL + u * length;
+            float z = cz + amp * std::sin(twoPi * 2.0f * u) - thickness * 0.5f;
+            pts.push_back({x, 0.005f, z});
+        }
+
+        return pts;
+    }
+
+    static std::vector<utils::math::Vec3f> evaluateClosedCatmullRom(
+        const std::vector<utils::math::Vec3f>& ctrlPts, int subdivPerSpan = 8)
+    {
+        std::vector<utils::math::Vec3f> result;
+        size_t m = ctrlPts.size();
+        if (m < 3)
+            return ctrlPts;
+
+        result.reserve(m * subdivPerSpan);
+        for (size_t i = 0; i < m; ++i)
+        {
+            const auto& pPrev = ctrlPts[(i + m - 1) % m];
+            const auto& p0 = ctrlPts[i];
+            const auto& p1 = ctrlPts[(i + 1) % m];
+            const auto& p2 = ctrlPts[(i + 2) % m];
+
+            for (int step = 0; step < subdivPerSpan; ++step)
+            {
+                float t = static_cast<float>(step) / static_cast<float>(subdivPerSpan);
+                float t2 = t * t;
+                float t3 = t2 * t;
+
+                float f0 = -0.5f * t3 + t2 - 0.5f * t;
+                float f1 = 1.5f * t3 - 2.5f * t2 + 1.0f;
+                float f2 = -1.5f * t3 + 2.0f * t2 + 0.5f * t;
+                float f3 = 0.5f * t3 - 0.5f * t2;
+
+                float x = f0 * pPrev.x + f1 * p0.x + f2 * p1.x + f3 * p2.x;
+                float y = f0 * pPrev.y + f1 * p0.y + f2 * p1.y + f3 * p2.y;
+                float z = f0 * pPrev.z + f1 * p0.z + f2 * p1.z + f3 * p2.z;
+
+                result.push_back({x, y, z});
+            }
+        }
+        return result;
+    }
+
+    // 9. 2D Sketch Extrusion with 3D Chamfers & Multi-Step Bevels + Watertight Manifold
+    static MeshData createExtrudedPolygon(const std::vector<utils::math::Vec3f>& rawPts,
+                                          float height = 1.2f, float bevelWidth = 0.0f,
+                                          int bevelSegments = 1,
+                                          manifold::Manifold* outManifold = nullptr)
     {
         std::vector<rendering::Vertex> vertices;
         std::vector<uint32_t> indices;
 
-        if (sketchPts.size() < 3)
+        if (rawPts.size() < 3)
             return {std::move(vertices), std::move(indices)};
 
         // 1. Clean points: remove consecutive duplicates and closing duplicate
         std::vector<utils::math::Vec3f> pts;
-        pts.reserve(sketchPts.size());
-        for (const auto& p : sketchPts)
+        pts.reserve(rawPts.size());
+        for (const auto& p : rawPts)
         {
             if (pts.empty())
             {
@@ -521,18 +654,143 @@ class Primitives
             }
         }
 
-        // 4. Generate 3D Mesh
-        const float topColor[3] = {0.92f, 0.76f, 0.35f};   // Polished Brass / Gold Top
-        const float botColor[3] = {0.50f, 0.52f, 0.58f};   // Slate Steel / Cast Iron Bottom
-        const float sideColor[3] = {0.20f, 0.72f, 0.85f};  // Anodized CAD Cyan / Teal
-
-        // A. Top Cap (Y = height, normal = (0, 1, 0))
-        uint32_t topBase = static_cast<uint32_t>(vertices.size());
+        // 4. Compute per-vertex 2D inward miter vectors
+        struct MiterVec
+        {
+            float vx{0.0f};
+            float vz{0.0f};
+        };
+        std::vector<MiterVec> miters(n);
         for (size_t i = 0; i < n; ++i)
         {
-            vertices.push_back({{pts[i].x, height, pts[i].z},
-                                {0.0f, 1.0f, 0.0f},
-                                {topColor[0], topColor[1], topColor[2]}});
+            size_t prev = (i + n - 1) % n;
+            size_t next = (i + 1) % n;
+
+            float e1x = pts[i].x - pts[prev].x;
+            float e1z = pts[i].z - pts[prev].z;
+            float l1 = std::hypot(e1x, e1z);
+            if (l1 > 1e-6f)
+            {
+                e1x /= l1;
+                e1z /= l1;
+            }
+
+            float e2x = pts[next].x - pts[i].x;
+            float e2z = pts[next].z - pts[i].z;
+            float l2 = std::hypot(e2x, e2z);
+            if (l2 > 1e-6f)
+            {
+                e2x /= l2;
+                e2z /= l2;
+            }
+
+            // Inward normal for CCW edge (dx, dz) is (-dz, dx)
+            float n1x = -e1z;
+            float n1z = e1x;
+            float n2x = -e2z;
+            float n2z = e2x;
+
+            float mx = n1x + n2x;
+            float mz = n1z + n2z;
+            float ml = std::hypot(mx, mz);
+            if (ml < 1e-4f)
+            {
+                miters[i] = {n1x, n1z};
+            }
+            else
+            {
+                float s = std::min(2.0f / ml, 2.0f);
+                miters[i] = {(mx / ml) * s, (mz / ml) * s};
+            }
+        }
+
+        // 5. Centroid & minimum radius for safe inset clamping
+        float cx = 0.0f;
+        float cz = 0.0f;
+        for (const auto& p : pts)
+        {
+            cx += p.x;
+            cz += p.z;
+        }
+        cx /= static_cast<float>(n);
+        cz /= static_cast<float>(n);
+
+        float minRad = 1e9f;
+        for (const auto& p : pts)
+        {
+            float d = std::hypot(p.x - cx, p.z - cz);
+            if (d < minRad)
+                minRad = d;
+        }
+
+        float b = std::max(0.0f, bevelWidth);
+        b = std::min(b, 0.35f * height);
+        b = std::min(b, 0.35f * minRad);
+
+        struct ProfileStep
+        {
+            float y{0.0f};
+            float inset{0.0f};
+        };
+        std::vector<ProfileStep> profile;
+
+        if (b <= 0.001f)
+        {
+            profile.push_back({0.0f, 0.0f});
+            profile.push_back({height, 0.0f});
+        }
+        else if (bevelSegments <= 1)
+        {
+            profile.push_back({0.0f, b});
+            profile.push_back({b, 0.0f});
+            profile.push_back({height - b, 0.0f});
+            profile.push_back({height, b});
+        }
+        else
+        {
+            int s = std::clamp(bevelSegments, 2, 8);
+            const float pi = 3.14159265359f;
+            // Bottom quarter-arc: theta from 0 to pi/2
+            for (int k = 0; k <= s; ++k)
+            {
+                float theta = (pi * 0.5f) * static_cast<float>(k) / static_cast<float>(s);
+                float y = b * (1.0f - std::cos(theta));
+                float in = b * (1.0f - std::sin(theta));
+                profile.push_back({y, in});
+            }
+            // Top quarter-arc: theta from 0 to pi/2
+            for (int k = 0; k <= s; ++k)
+            {
+                float theta = (pi * 0.5f) * static_cast<float>(k) / static_cast<float>(s);
+                float y = (height - b) + b * std::sin(theta);
+                float in = b * (1.0f - std::cos(theta));
+                profile.push_back({y, in});
+            }
+        }
+
+        auto getRingVertex = [&](size_t ringIdx, size_t vertIdx) -> utils::math::Vec3f
+        {
+            float y = profile[ringIdx].y;
+            float in = profile[ringIdx].inset;
+            float vx = pts[vertIdx].x + in * miters[vertIdx].vx;
+            float vz = pts[vertIdx].z + in * miters[vertIdx].vz;
+            return {vx, y, vz};
+        };
+
+        // 6. Generate 3D Mesh
+        const float topColor[3] = {0.92f, 0.76f, 0.35f};      // Polished Brass / Gold Top
+        const float botColor[3] = {0.50f, 0.52f, 0.58f};      // Slate Steel / Cast Iron Bottom
+        const float sideColor[3] = {0.20f, 0.72f, 0.85f};     // Anodized CAD Cyan / Teal
+        const float chamferColor[3] = {0.95f, 0.82f, 0.40f};  // Polished Gold/Brass Highlight
+
+        // A. Top Cap (Y = profile.back().y, normal = (0, 1, 0))
+        uint32_t topBase = static_cast<uint32_t>(vertices.size());
+        size_t topRingIdx = profile.size() - 1;
+        for (size_t i = 0; i < n; ++i)
+        {
+            auto pt = getRingVertex(topRingIdx, i);
+            vertices.push_back(
+                {{pt.x, pt.y, pt.z}, {0.0f, 1.0f, 0.0f}, {topColor[0], topColor[1], topColor[2]}});
         }
         for (const auto& tri : capTriangles)
         {
@@ -541,13 +799,13 @@ class Primitives
             indices.push_back(topBase + tri[1]);
         }
 
-        // B. Bottom Cap (Y = 0, normal = (0, -1, 0))
+        // B. Bottom Cap (Y = profile.front().y, normal = (0, -1, 0))
         uint32_t botBase = static_cast<uint32_t>(vertices.size());
         for (size_t i = 0; i < n; ++i)
         {
-            vertices.push_back({{pts[i].x, 0.0f, pts[i].z},
-                                {0.0f, -1.0f, 0.0f},
-                                {botColor[0], botColor[1], botColor[2]}});
+            auto pt = getRingVertex(0, i);
+            vertices.push_back(
+                {{pt.x, pt.y, pt.z}, {0.0f, -1.0f, 0.0f}, {botColor[0], botColor[1], botColor[2]}});
         }
         for (const auto& tri : capTriangles)
         {
@@ -556,40 +814,115 @@ class Primitives
             indices.push_back(botBase + tri[2]);
         }
 
-        // C. Perimeter Side Walls
-        for (size_t i = 0; i < n; ++i)
+        // C. Side and Bevel Bands between consecutive rings
+        for (size_t r = 0; r + 1 < profile.size(); ++r)
         {
-            size_t j = (i + 1) % n;
-            float dx = pts[j].x - pts[i].x;
-            float dz = pts[j].z - pts[i].z;
-            float len = std::hypot(dx, dz);
-            if (len < 1e-6f)
-                continue;
+            bool isBevelBand = (profile[r].inset > 1e-4f || profile[r + 1].inset > 1e-4f);
+            const float* bandColor = isBevelBand ? chamferColor : sideColor;
 
-            float nx = dz / len;
-            float nz = -dx / len;
+            for (size_t i = 0; i < n; ++i)
+            {
+                size_t j = (i + 1) % n;
 
-            uint32_t wBase = static_cast<uint32_t>(vertices.size());
-            vertices.push_back({{pts[i].x, 0.0f, pts[i].z},
-                                {nx, 0.0f, nz},
-                                {sideColor[0], sideColor[1], sideColor[2]}});
-            vertices.push_back({{pts[j].x, 0.0f, pts[j].z},
-                                {nx, 0.0f, nz},
-                                {sideColor[0], sideColor[1], sideColor[2]}});
-            vertices.push_back({{pts[j].x, height, pts[j].z},
-                                {nx, 0.0f, nz},
-                                {sideColor[0], sideColor[1], sideColor[2]}});
-            vertices.push_back({{pts[i].x, height, pts[i].z},
-                                {nx, 0.0f, nz},
-                                {sideColor[0], sideColor[1], sideColor[2]}});
+                auto p00 = getRingVertex(r, i);
+                auto p01 = getRingVertex(r, j);
+                auto p11 = getRingVertex(r + 1, j);
+                auto p10 = getRingVertex(r + 1, i);
 
-            indices.push_back(wBase + 0);
-            indices.push_back(wBase + 3);
-            indices.push_back(wBase + 2);
+                // Compute outward normal: (p10 - p00) x (p01 - p00)
+                float vx = p10.x - p00.x;
+                float vy = p10.y - p00.y;
+                float vz = p10.z - p00.z;
 
-            indices.push_back(wBase + 0);
-            indices.push_back(wBase + 2);
-            indices.push_back(wBase + 1);
+                float ux = p01.x - p00.x;
+                float uy = p01.y - p00.y;
+                float uz = p01.z - p00.z;
+
+                float nx = vy * uz - vz * uy;
+                float ny = vz * ux - vx * uz;
+                float nz = vx * uy - vy * ux;
+                float nl = std::sqrt(nx * nx + ny * ny + nz * nz);
+                if (nl > 1e-6f)
+                {
+                    nx /= nl;
+                    ny /= nl;
+                    nz /= nl;
+                }
+
+                uint32_t wBase = static_cast<uint32_t>(vertices.size());
+                vertices.push_back({{p00.x, p00.y, p00.z},
+                                    {nx, ny, nz},
+                                    {bandColor[0], bandColor[1], bandColor[2]}});
+                vertices.push_back({{p01.x, p01.y, p01.z},
+                                    {nx, ny, nz},
+                                    {bandColor[0], bandColor[1], bandColor[2]}});
+                vertices.push_back({{p11.x, p11.y, p11.z},
+                                    {nx, ny, nz},
+                                    {bandColor[0], bandColor[1], bandColor[2]}});
+                vertices.push_back({{p10.x, p10.y, p10.z},
+                                    {nx, ny, nz},
+                                    {bandColor[0], bandColor[1], bandColor[2]}});
+
+                indices.push_back(wBase + 0);
+                indices.push_back(wBase + 3);
+                indices.push_back(wBase + 2);
+
+                indices.push_back(wBase + 0);
+                indices.push_back(wBase + 2);
+                indices.push_back(wBase + 1);
+            }
+        }
+
+        // 7. Watertight manifold construction
+        if (outManifold != nullptr)
+        {
+            std::map<std::tuple<int64_t, int64_t, int64_t>, uint32_t> coordMap;
+            std::vector<uint32_t> remap(vertices.size());
+            std::vector<float> weldedVerts;
+
+            for (size_t k = 0; k < vertices.size(); ++k)
+            {
+                const auto& pos = vertices[k].position;
+                int64_t qx = static_cast<int64_t>(std::round(pos[0] * 100000.0f));
+                int64_t qy = static_cast<int64_t>(std::round(pos[1] * 100000.0f));
+                int64_t qz = static_cast<int64_t>(std::round(pos[2] * 100000.0f));
+                auto key = std::make_tuple(qx, qy, qz);
+                auto it = coordMap.find(key);
+                if (it == coordMap.end())
+                {
+                    uint32_t newIdx = static_cast<uint32_t>(weldedVerts.size() / 3);
+                    coordMap[key] = newIdx;
+                    remap[k] = newIdx;
+                    weldedVerts.push_back(pos[0]);
+                    weldedVerts.push_back(pos[1]);
+                    weldedVerts.push_back(pos[2]);
+                }
+                else
+                {
+                    remap[k] = it->second;
+                }
+            }
+
+            std::vector<uint32_t> weldedIndices;
+            weldedIndices.reserve(indices.size());
+            for (size_t k = 0; k + 2 < indices.size(); k += 3)
+            {
+                uint32_t i0 = remap[indices[k]];
+                uint32_t i1 = remap[indices[k + 1]];
+                uint32_t i2 = remap[indices[k + 2]];
+                if (i0 != i1 && i1 != i2 && i2 != i0)
+                {
+                    weldedIndices.push_back(i0);
+                    weldedIndices.push_back(i1);
+                    weldedIndices.push_back(i2);
+                }
+            }
+
+            manifold::MeshGL gl;
+            gl.numProp = 3;
+            gl.vertProperties = std::move(weldedVerts);
+            gl.triVerts = std::move(weldedIndices);
+            *outManifold = manifold::Manifold(gl);
         }
 
         return {std::move(vertices), std::move(indices)};
