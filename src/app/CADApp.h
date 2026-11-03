@@ -225,6 +225,7 @@ class CADApp
 
     // UI toolbar state
     bool m_showMenu{true};
+    bool m_fullWidth{true};
 
     // Scene geometry & Multi-object scene graph
     std::vector<SceneObject> m_objects;

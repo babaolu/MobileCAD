@@ -764,6 +764,8 @@ void CADApp::initImGui(ANativeWindow* window)
     ImGuiStyle& style = ImGui::GetStyle();
     style.ScaleAllSizes(2.6f);
     io.FontGlobalScale = 2.6f;
+    style.ScrollbarSize = 36.0f;
+    style.TouchExtraPadding = ImVec2(8.0f, 8.0f);
 
     ImGui_ImplAndroid_Init(window);
 
@@ -793,7 +795,7 @@ void CADApp::renderCompassGizmo()
     if (screenW <= 0.0f)
         return;
 
-    ImVec2 center(screenW - 110.0f, 130.0f);
+    ImVec2 center(screenW - 115.0f, 190.0f);
     float radius = 75.0f;
 
     ImDrawList* drawList = ImGui::GetBackgroundDrawList();
@@ -1265,19 +1267,19 @@ void CADApp::renderImGui()
 
     if (!m_showMenu)
     {
-        // Sleek floating [ ⚙ CAD Menu ] button in top-left
-        ImGui::SetNextWindowPos(ImVec2(24.0f, 24.0f), ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.75f);
+        // Sleek floating [ + Open CAD Menu ] button below Android status bar
+        ImGui::SetNextWindowPos(ImVec2(24.0f, 110.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.85f);
         ImGuiWindowFlags toggleFlags =
             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
             ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
         if (ImGui::Begin("##CADMenuToggle", nullptr, toggleFlags))
         {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.45f, 0.75f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.45f, 0.75f, 0.95f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.88f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.35f, 0.60f, 1.0f));
-            if (ImGui::Button("  ⚙ CAD Menu  ", ImVec2(0.0f, 44.0f)))
+            if (ImGui::Button("[ + Open CAD Menu ]", ImVec2(360.0f, 75.0f)))
             {
                 m_showMenu = true;
             }
@@ -1287,13 +1289,24 @@ void CADApp::renderImGui()
     }
     else
     {
-        float maxH = ImGui::GetIO().DisplaySize.y * 0.72f;
-        ImGui::SetNextWindowPos(ImVec2(24.0f, 24.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Appearing);
-        ImGui::SetNextWindowSizeConstraints(ImVec2(480.0f, 150.0f), ImVec2(600.0f, maxH));
-        ImGui::SetNextWindowBgAlpha(0.90f);
-        if (ImGui::Begin("MobileCAD Studio", &m_showMenu))
+        float screenW = ImGui::GetIO().DisplaySize.x;
+        float screenH = ImGui::GetIO().DisplaySize.y;
+        float fullW = screenW - 40.0f;
+        float compactW = 520.0f;
+
+        ImGui::SetNextWindowPos(ImVec2(20.0f, 110.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(fullW, 0.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(450.0f, 220.0f),
+                                            ImVec2(screenW - 20.0f, screenH - 130.0f));
+        ImGui::SetNextWindowBgAlpha(0.92f);
+        if (ImGui::Begin("MobileCAD Studio", &m_showMenu, ImGuiWindowFlags_HorizontalScrollbar))
         {
+            ImVec2 curPos = ImGui::GetWindowPos();
+            if (curPos.y < 100.0f)
+            {
+                ImGui::SetWindowPos(ImVec2(curPos.x, 110.0f));
+            }
+
             // 1. Performance & Stats
             float fps = ImGui::GetIO().Framerate;
             uint32_t solidVerts = 0;
@@ -1318,15 +1331,30 @@ void CADApp::renderImGui()
 
             ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Vulkan 1.4 Native CAD");
             ImGui::SameLine();
-            float hideTargetX = ImGui::GetWindowContentRegionMax().x - 84.0f;
-            if (ImGui::GetCursorPosX() < hideTargetX)
+
+            float rightEdge = ImGui::GetWindowContentRegionMax().x;
+            float hideBtnW = 75.0f;
+            float toggleBtnW = m_fullWidth ? 115.0f : 140.0f;
+            float spacing = ImGui::GetStyle().ItemSpacing.x;
+            float targetX = rightEdge - (hideBtnW + toggleBtnW + spacing);
+
+            if (ImGui::GetCursorPosX() < targetX)
             {
-                ImGui::SameLine(hideTargetX);
+                ImGui::SameLine(targetX);
             }
+
+            if (ImGui::SmallButton(m_fullWidth ? "Compact" : "Full Width"))
+            {
+                m_fullWidth = !m_fullWidth;
+                ImGui::SetWindowSize(ImVec2(m_fullWidth ? fullW : compactW, 0.0f));
+            }
+
+            ImGui::SameLine();
             if (ImGui::SmallButton("Hide"))
             {
                 m_showMenu = false;
             }
+
             ImGui::Text("FPS: %.1f (%.2f ms/f) | %s", fps, 1000.0f / (fps > 0.0f ? fps : 60.0f),
                         m_vsync ? "120Hz VSync" : "Uncapped Benchmark");
             ImGui::Text("Assembly: %zu parts | %u tris (Total: %u)", m_objects.size(), solidTris,
@@ -1343,7 +1371,7 @@ void CADApp::renderImGui()
             }
 
             float availW = ImGui::GetContentRegionAvail().x;
-            float spacing = ImGui::GetStyle().ItemSpacing.x;
+            spacing = ImGui::GetStyle().ItemSpacing.x;
             float presetBtnW = (availW - spacing * 3.0f) * 0.25f;
 
             if (ImGui::Button("Iso", ImVec2(presetBtnW, 0.0f)))
