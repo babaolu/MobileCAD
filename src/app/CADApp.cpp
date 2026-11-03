@@ -1088,17 +1088,25 @@ bool CADApp::drawNumericControl(const char* label, float* value, float step, flo
     bool changed = false;
     ImGui::PushID(label);
 
-    ImGui::Text("%s", label);
-
     float availW = ImGui::GetContentRegionAvail().x;
-    float btnW = 42.0f;
-    float padBtnW = 42.0f;
-    float spacing = ImGui::GetStyle().ItemSpacing.x;
-    float centerW = availW - (2.0f * btnW + padBtnW + 3.0f * spacing);
-    if (centerW < 70.0f)
-        centerW = 70.0f;
+    float btnW = 32.0f;
+    float valW = 72.0f;
+    float controlW = btnW * 2.0f + valW + ImGui::GetStyle().ItemSpacing.x * 2.0f;
 
-    // 1. [-] hold-repeat button
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+
+    float targetX = availW - controlW + ImGui::GetStyle().ItemSpacing.x;
+    if (ImGui::GetCursorPosX() < targetX)
+    {
+        ImGui::SameLine(targetX);
+    }
+    else
+    {
+        ImGui::SameLine();
+    }
+
+    // [-] hold-repeat stepper
     ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
     if (ImGui::Button("-##dec", ImVec2(btnW, 0.0f)))
     {
@@ -1111,16 +1119,21 @@ bool CADApp::drawNumericControl(const char* label, float* value, float step, flo
 
     ImGui::SameLine();
 
-    // 2. Center Slider
-    ImGui::SetNextItemWidth(centerW);
-    if (ImGui::SliderFloat("##val", value, minVal, maxVal, format))
+    // [ value ] Direct-type button
+    char valBuf[32];
+    snprintf(valBuf, sizeof(valBuf), format, *value);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.22f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.35f, 0.50f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.16f, 0.22f, 1.0f));
+    if (ImGui::Button(valBuf, ImVec2(valW, 0.0f)))
     {
-        changed = true;
+        openNumpad(label, value, minVal, maxVal, *value, format, onChanged);
     }
+    ImGui::PopStyleColor(3);
 
     ImGui::SameLine();
 
-    // 3. [+] hold-repeat button
+    // [+] hold-repeat stepper
     ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
     if (ImGui::Button("+##inc", ImVec2(btnW, 0.0f)))
     {
@@ -1130,14 +1143,6 @@ bool CADApp::drawNumericControl(const char* label, float* value, float step, flo
         changed = true;
     }
     ImGui::PopItemFlag();
-
-    ImGui::SameLine();
-
-    // 4. [#] Direct keypad entry button
-    if (ImGui::Button("###numpad", ImVec2(padBtnW, 0.0f)))
-    {
-        openNumpad(label, value, minVal, maxVal, *value, format, onChanged);
-    }
 
     ImGui::PopID();
 
@@ -1154,7 +1159,8 @@ bool CADApp::drawVec3Control(const char* label, utils::math::Vec3f* vec, float s
     bool changed = false;
     ImGui::PushID(label);
 
-    ImGui::Text("%s:", label);
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("%s", label);
     ImGui::SameLine();
     if (ImGui::SmallButton("Reset"))
     {
@@ -1164,19 +1170,92 @@ bool CADApp::drawVec3Control(const char* label, utils::math::Vec3f* vec, float s
         changed = true;
     }
 
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
-    changed |= drawNumericControl("X", &vec->x, step, minVal, maxVal, "%.2f", onChanged);
-    ImGui::PopStyleColor();
+    if (ImGui::BeginTable("##vec3tbl", 3, ImGuiTableFlags_SizingStretchSame))
+    {
+        struct AxisInfo
+        {
+            const char* name;
+            float* val;
+            ImVec4 col;
+        };
+        AxisInfo axes[3] = {
+            {"X", &vec->x, ImVec4(1.0f, 0.40f, 0.40f, 1.0f)},
+            {"Y", &vec->y, ImVec4(0.40f, 1.0f, 0.40f, 1.0f)},
+            {"Z", &vec->z, ImVec4(0.40f, 0.65f, 1.0f, 1.0f)},
+        };
 
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 1.0f, 0.45f, 1.0f));
-    changed |= drawNumericControl("Y", &vec->y, step, minVal, maxVal, "%.2f", onChanged);
-    ImGui::PopStyleColor();
+        const char* fmt = (maxVal > 100.0f) ? "%.0f" : "%.2f";
 
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.65f, 1.0f, 1.0f));
-    changed |= drawNumericControl("Z", &vec->z, step, minVal, maxVal, "%.2f", onChanged);
-    ImGui::PopStyleColor();
+        for (int i = 0; i < 3; ++i)
+        {
+            ImGui::TableNextColumn();
+            ImGui::PushID(axes[i].name);
+
+            // Colored axis letter
+            ImGui::PushStyleColor(ImGuiCol_Text, axes[i].col);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(axes[i].name);
+            ImGui::PopStyleColor();
+
+            ImGui::SameLine(0.0f, 2.0f);
+
+            float colAvail = ImGui::GetContentRegionAvail().x;
+            float btnW = 20.0f;
+            float valW = colAvail - (btnW * 2.0f + 6.0f);
+            if (valW < 36.0f)
+                valW = 36.0f;
+
+            // [-] button
+            ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
+            if (ImGui::Button("-##dec", ImVec2(btnW, 0.0f)))
+            {
+                *axes[i].val -= step;
+                if (*axes[i].val < minVal)
+                    *axes[i].val = minVal;
+                changed = true;
+            }
+            ImGui::PopItemFlag();
+
+            ImGui::SameLine(0.0f, 2.0f);
+
+            // [ val ] direct-type button
+            char valBuf[32];
+            snprintf(valBuf, sizeof(valBuf), fmt, *axes[i].val);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.22f, 0.30f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.35f, 0.50f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.16f, 0.22f, 1.0f));
+            if (ImGui::Button(valBuf, ImVec2(valW, 0.0f)))
+            {
+                std::string fullTitle = std::string(label) + " " + axes[i].name;
+                openNumpad(fullTitle.c_str(), axes[i].val, minVal, maxVal, resetVal, fmt,
+                           onChanged);
+            }
+            ImGui::PopStyleColor(3);
+
+            ImGui::SameLine(0.0f, 2.0f);
+
+            // [+] button
+            ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
+            if (ImGui::Button("+##inc", ImVec2(btnW, 0.0f)))
+            {
+                *axes[i].val += step;
+                if (*axes[i].val > maxVal)
+                    *axes[i].val = maxVal;
+                changed = true;
+            }
+            ImGui::PopItemFlag();
+
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
 
     ImGui::PopID();
+
+    if (changed && onChanged)
+    {
+        onChanged();
+    }
     return changed;
 }
 
@@ -1184,355 +1263,392 @@ void CADApp::renderImGui()
 {
     renderCompassGizmo();
 
-    ImGui::SetNextWindowPos(ImVec2(30.0f, 30.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowBgAlpha(0.88f);
-    if (ImGui::Begin("MobileCAD Studio", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    if (!m_showMenu)
     {
-        // 1. Performance & Stats
-        float fps = ImGui::GetIO().Framerate;
-        uint32_t solidVerts = 0;
-        uint32_t solidTris = 0;
-        for (const auto& obj : m_objects)
+        // Sleek floating [ ⚙ CAD Menu ] button in top-left
+        ImGui::SetNextWindowPos(ImVec2(24.0f, 24.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.75f);
+        ImGuiWindowFlags toggleFlags =
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+        if (ImGui::Begin("##CADMenuToggle", nullptr, toggleFlags))
         {
-            solidVerts += static_cast<uint32_t>(obj.cpuVertices.size());
-            solidTris += static_cast<uint32_t>(obj.cpuIndices.size() / 3);
-        }
-        uint32_t totalVerts = solidVerts;
-        if (m_gridMesh && m_showGrid)
-        {
-            totalVerts += m_gridMesh->getVertexCount();
-        }
-        for (const auto& obj : m_objects)
-        {
-            if (obj.wireframeMesh && m_showWireframe)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.45f, 0.75f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.88f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.35f, 0.60f, 1.0f));
+            if (ImGui::Button("  ⚙ CAD Menu  ", ImVec2(0.0f, 44.0f)))
             {
-                totalVerts += obj.wireframeMesh->getVertexCount();
+                m_showMenu = true;
             }
+            ImGui::PopStyleColor(3);
+            ImGui::End();
         }
-
-        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Vulkan 1.4 Native CAD");
-        ImGui::Text("FPS: %.1f (%.2f ms/frame) | %s", fps, 1000.0f / (fps > 0.0f ? fps : 60.0f),
-                    m_vsync ? "VSync 120Hz" : "Uncapped Benchmark");
-        ImGui::Text("Assembly: %zu parts | %u verts, %u tris (Total: %u)", m_objects.size(),
-                    solidVerts, solidTris, totalVerts);
-        ImGui::Separator();
-
-        // 2. View Presets
-        ImGui::Text("Camera Presets:");
-        if (ImGui::Button("Iso"))
+    }
+    else
+    {
+        float maxH = ImGui::GetIO().DisplaySize.y * 0.72f;
+        ImGui::SetNextWindowPos(ImVec2(24.0f, 24.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(340.0f, 0.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, 120.0f), ImVec2(380.0f, maxH));
+        ImGui::SetNextWindowBgAlpha(0.90f);
+        if (ImGui::Begin("MobileCAD Studio", &m_showMenu))
         {
-            m_camera.setViewIso();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Top"))
-        {
-            m_camera.setViewTop();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Front"))
-        {
-            m_camera.setViewFront();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Right"))
-        {
-            m_camera.setViewRight();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Reset"))
-        {
-            m_camera.resetView();
-        }
-
-        // 3. Scene Assembly Section
-        if (ImGui::CollapsingHeader("Scene Assembly", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            if (ImGui::Button("+ Add Part"))
+            // 1. Performance & Stats
+            float fps = ImGui::GetIO().Framerate;
+            uint32_t solidVerts = 0;
+            uint32_t solidTris = 0;
+            for (const auto& obj : m_objects)
             {
-                SceneObject newObj;
-                newObj.name = "Part_" + std::to_string(m_objects.size() + 1);
-                newObj.position = {static_cast<float>(m_objects.size()) * 1.5f, 0.0f, 0.0f};
-                m_objects.push_back(std::move(newObj));
-                m_selectedIndex = static_cast<int>(m_objects.size() - 1);
-                rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                solidVerts += static_cast<uint32_t>(obj.cpuVertices.size());
+                solidTris += static_cast<uint32_t>(obj.cpuIndices.size() / 3);
             }
-            ImGui::SameLine();
-            if (ImGui::Button("Duplicate"))
+            uint32_t totalVerts = solidVerts;
+            if (m_gridMesh && m_showGrid)
             {
-                if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
+                totalVerts += m_gridMesh->getVertexCount();
+            }
+            for (const auto& obj : m_objects)
+            {
+                if (obj.wireframeMesh && m_showWireframe)
                 {
-                    const auto& src = m_objects[m_selectedIndex];
-                    SceneObject dup;
-                    dup.name = src.name + "_copy";
-                    dup.primitiveType = src.primitiveType;
-                    dup.params = src.params;
-                    dup.sketchPoints = src.sketchPoints;
-                    dup.position = src.position + utils::math::Vec3f(0.8f, 0.0f, 0.8f);
-                    dup.rotationDeg = src.rotationDeg;
-                    dup.scale = src.scale;
-                    m_objects.push_back(std::move(dup));
-                    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
-                    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Delete"))
-            {
-                if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
-                {
-                    m_objects.erase(m_objects.begin() + m_selectedIndex);
-                    if (m_objects.empty())
-                    {
-                        m_selectedIndex = -1;
-                    }
-                    else if (m_selectedIndex >= static_cast<int>(m_objects.size()))
-                    {
-                        m_selectedIndex = static_cast<int>(m_objects.size()) - 1;
-                    }
+                    totalVerts += obj.wireframeMesh->getVertexCount();
                 }
             }
 
-            if (!m_objects.empty())
+            ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Vulkan 1.4 Native CAD");
+            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 48.0f);
+            if (ImGui::SmallButton("Hide"))
             {
-                const char* previewName =
-                    (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
-                        ? m_objects[m_selectedIndex].name.c_str()
-                        : "(None selected)";
-                if (ImGui::BeginCombo("Select Part", previewName))
-                {
-                    for (int i = 0; i < static_cast<int>(m_objects.size()); ++i)
-                    {
-                        bool isSelected = (m_selectedIndex == i);
-                        if (ImGui::Selectable(m_objects[i].name.c_str(), isSelected))
-                        {
-                            m_selectedIndex = i;
-                        }
-                        if (isSelected)
-                        {
-                            ImGui::SetItemDefaultFocus();
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
+                m_showMenu = false;
             }
-            else
-            {
-                ImGui::TextDisabled("(Scene is empty — tap [+ Add Part] or 2D Sketch)");
-            }
-        }
+            ImGui::Text("FPS: %.1f (%.2f ms/f) | %s", fps, 1000.0f / (fps > 0.0f ? fps : 60.0f),
+                        m_vsync ? "120Hz VSync" : "Uncapped Benchmark");
+            ImGui::Text("Assembly: %zu parts | %u tris (Total: %u)", m_objects.size(), solidTris,
+                        totalVerts);
+            ImGui::Separator();
 
-        // 4. 2D Sketch & Extrude Section
-        if (ImGui::CollapsingHeader("2D Sketch & Extrude", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            ImGui::Checkbox("2D Sketch Mode (Tap Ground Plane)", &m_sketchMode);
+            // 2. View Presets
+            ImGui::Text("Camera Presets:");
+            if (ImGui::Button("Iso"))
+            {
+                m_camera.setViewIso();
+            }
             ImGui::SameLine();
-            if (ImGui::Button("Snap View to Top"))
+            if (ImGui::Button("Top"))
             {
                 m_camera.setViewTop();
             }
-
-            ImGui::Checkbox("Snap to 0.25 Grid", &m_snapToGrid);
-
-            ImGui::Text("Sketch Points: %zu", m_sketchPoints.size());
-
-            if (ImGui::Button("Undo Point") && !m_sketchPoints.empty())
+            ImGui::SameLine();
+            if (ImGui::Button("Front"))
             {
-                undoSketchPoint();
+                m_camera.setViewFront();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Clear Sketch") && !m_sketchPoints.empty())
+            if (ImGui::Button("Right"))
             {
-                clearSketch();
+                m_camera.setViewRight();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset"))
+            {
+                m_camera.resetView();
             }
 
-            drawNumericControl("Extrude Height", &m_extrudeHeight, 0.05f, 0.2f, 4.0f, "%.2f");
-
-            bool canExtrude = (m_sketchPoints.size() >= 3);
-            if (!canExtrude)
+            // 3. Scene Assembly Section
+            if (ImGui::CollapsingHeader("Scene Assembly", ImGuiTreeNodeFlags_DefaultOpen))
             {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::Button("Extrude Profile to 3D Part", ImVec2(-1.0f, 0.0f)))
-            {
-                extrudeSketchToPart();
-            }
-            if (!canExtrude)
-            {
-                ImGui::EndDisabled();
-            }
-        }
-
-        // 5. Transform Inspector & Parametric Modeling for Selected Part
-        if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
-        {
-            auto& obj = m_objects[m_selectedIndex];
-
-            if (ImGui::CollapsingHeader("Transform Inspector", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                drawVec3Control("Position", &obj.position, 0.05f, -5.0f, 5.0f, 0.0f);
-                drawVec3Control("Rotate (deg)", &obj.rotationDeg, 1.0f, -180.0f, 180.0f, 0.0f);
-                drawVec3Control("Scale", &obj.scale, 0.05f, 0.05f, 10.0f, 1.0f);
-            }
-
-            if (ImGui::CollapsingHeader("Parameters & CSG", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                bool changed = false;
-                auto onGeomChanged = [this]()
+                if (ImGui::Button("+ Add Part"))
+                {
+                    SceneObject newObj;
+                    newObj.name = "Part_" + std::to_string(m_objects.size() + 1);
+                    newObj.position = {static_cast<float>(m_objects.size()) * 1.5f, 0.0f, 0.0f};
+                    m_objects.push_back(std::move(newObj));
+                    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+                    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Duplicate"))
                 {
                     if (m_selectedIndex >= 0 &&
                         m_selectedIndex < static_cast<int>(m_objects.size()))
+                    {
+                        const auto& src = m_objects[m_selectedIndex];
+                        SceneObject dup;
+                        dup.name = src.name + "_copy";
+                        dup.primitiveType = src.primitiveType;
+                        dup.params = src.params;
+                        dup.sketchPoints = src.sketchPoints;
+                        dup.position = src.position + utils::math::Vec3f(0.8f, 0.0f, 0.8f);
+                        dup.rotationDeg = src.rotationDeg;
+                        dup.scale = src.scale;
+                        m_objects.push_back(std::move(dup));
+                        m_selectedIndex = static_cast<int>(m_objects.size() - 1);
                         rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
-                };
-
-                const char* csgItems[] = {"Solid Primitive", "Subtract (Drill Hole)",
-                                          "Union (Boss Hub)", "Intersect (Box ^ Sphere)",
-                                          "Hollow Cylinder Pipe"};
-                if (ImGui::Combo("CSG Op", &obj.params.csgMode, csgItems, IM_ARRAYSIZE(csgItems)))
-                {
-                    changed = true;
-                }
-
-                if (obj.params.csgMode == 0)
-                {
-                    if (obj.primitiveType == PrimitiveType::Extrude)
-                    {
-                        ImGui::Text("Extruded Solid Part (%zu sketch points)",
-                                    obj.sketchPoints.size());
-                        changed |= drawNumericControl("Extrude Height", &obj.params.height, 0.05f,
-                                                      0.2f, 4.0f, "%.2f", onGeomChanged);
                     }
-                    else
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Delete"))
+                {
+                    if (m_selectedIndex >= 0 &&
+                        m_selectedIndex < static_cast<int>(m_objects.size()))
                     {
-                        ImGui::Text("Primitive:");
-                        if (ImGui::RadioButton("Box", obj.primitiveType == PrimitiveType::Box))
+                        m_objects.erase(m_objects.begin() + m_selectedIndex);
+                        if (m_objects.empty())
                         {
-                            obj.primitiveType = PrimitiveType::Box;
-                            changed = true;
+                            m_selectedIndex = -1;
                         }
-                        ImGui::SameLine();
-                        if (ImGui::RadioButton("Cylinder",
-                                               obj.primitiveType == PrimitiveType::Cylinder))
+                        else if (m_selectedIndex >= static_cast<int>(m_objects.size()))
                         {
-                            obj.primitiveType = PrimitiveType::Cylinder;
-                            changed = true;
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::RadioButton("Sphere",
-                                               obj.primitiveType == PrimitiveType::Sphere))
-                        {
-                            obj.primitiveType = PrimitiveType::Sphere;
-                            changed = true;
+                            m_selectedIndex = static_cast<int>(m_objects.size()) - 1;
                         }
                     }
                 }
 
-                // Parametric Steppers with direct numpad
-                if (obj.primitiveType == PrimitiveType::Box || obj.params.csgMode > 0)
+                if (!m_objects.empty())
                 {
-                    changed |= drawNumericControl("Width", &obj.params.width, 0.05f, 0.2f, 4.0f,
-                                                  "%.2f", onGeomChanged);
-                    changed |= drawNumericControl("Height", &obj.params.height, 0.05f, 0.2f, 4.0f,
-                                                  "%.2f", onGeomChanged);
-                    changed |= drawNumericControl("Depth", &obj.params.depth, 0.05f, 0.2f, 4.0f,
-                                                  "%.2f", onGeomChanged);
-                }
-                if (obj.primitiveType == PrimitiveType::Cylinder ||
-                    obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
-                {
-                    changed |= drawNumericControl("Radius", &obj.params.radius, 0.05f, 0.1f, 2.0f,
-                                                  "%.2f", onGeomChanged);
-                }
-                if (obj.params.csgMode == 1 || obj.params.csgMode == 4)
-                {
-                    changed |= drawNumericControl("Hole Radius", &obj.params.holeRadius, 0.02f,
-                                                  0.05f, 1.8f, "%.2f", onGeomChanged);
-                }
-                if (obj.primitiveType == PrimitiveType::Cylinder ||
-                    obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
-                {
-                    float segs = static_cast<float>(obj.params.segments);
-                    if (drawNumericControl("Segments", &segs, 2.0f, 8.0f, 64.0f, "%.0f",
-                                           [&obj, &segs, onGeomChanged]()
-                                           {
-                                               obj.params.segments = static_cast<int>(segs);
-                                               onGeomChanged();
-                                           }))
+                    const char* previewName = (m_selectedIndex >= 0 &&
+                                               m_selectedIndex < static_cast<int>(m_objects.size()))
+                                                  ? m_objects[m_selectedIndex].name.c_str()
+                                                  : "(None selected)";
+                    if (ImGui::BeginCombo("Select Part", previewName))
                     {
-                        obj.params.segments = static_cast<int>(segs);
+                        for (int i = 0; i < static_cast<int>(m_objects.size()); ++i)
+                        {
+                            bool isSelected = (m_selectedIndex == i);
+                            if (ImGui::Selectable(m_objects[i].name.c_str(), isSelected))
+                            {
+                                m_selectedIndex = i;
+                            }
+                            if (isSelected)
+                            {
+                                ImGui::SetItemDefaultFocus();
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                }
+                else
+                {
+                    ImGui::TextDisabled("(Scene is empty — tap [+ Add Part] or 2D Sketch)");
+                }
+            }
+
+            // 4. 2D Sketch & Extrude Section
+            if (ImGui::CollapsingHeader("2D Sketch & Extrude"))
+            {
+                ImGui::Checkbox("2D Sketch Mode (Tap Ground Plane)", &m_sketchMode);
+                ImGui::SameLine();
+                if (ImGui::Button("Snap View to Top"))
+                {
+                    m_camera.setViewTop();
+                }
+
+                ImGui::Checkbox("Snap to 0.25 Grid", &m_snapToGrid);
+
+                ImGui::Text("Sketch Points: %zu", m_sketchPoints.size());
+
+                if (ImGui::Button("Undo Point") && !m_sketchPoints.empty())
+                {
+                    undoSketchPoint();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Clear Sketch") && !m_sketchPoints.empty())
+                {
+                    clearSketch();
+                }
+
+                drawNumericControl("Extrude Height", &m_extrudeHeight, 0.05f, 0.2f, 4.0f, "%.2f");
+
+                bool canExtrude = (m_sketchPoints.size() >= 3);
+                if (!canExtrude)
+                {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Extrude Profile to 3D Part", ImVec2(-1.0f, 0.0f)))
+                {
+                    extrudeSketchToPart();
+                }
+                if (!canExtrude)
+                {
+                    ImGui::EndDisabled();
+                }
+            }
+
+            // 5. Transform Inspector & Parametric Modeling for Selected Part
+            if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
+            {
+                auto& obj = m_objects[m_selectedIndex];
+
+                if (ImGui::CollapsingHeader("Transform Inspector"))
+                {
+                    drawVec3Control("Position", &obj.position, 0.05f, -5.0f, 5.0f, 0.0f);
+                    drawVec3Control("Rotate (deg)", &obj.rotationDeg, 1.0f, -180.0f, 180.0f, 0.0f);
+                    drawVec3Control("Scale", &obj.scale, 0.05f, 0.05f, 10.0f, 1.0f);
+                }
+
+                if (ImGui::CollapsingHeader("Parameters & CSG"))
+                {
+                    bool changed = false;
+                    auto onGeomChanged = [this]()
+                    {
+                        if (m_selectedIndex >= 0 &&
+                            m_selectedIndex < static_cast<int>(m_objects.size()))
+                            rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                    };
+
+                    const char* csgItems[] = {"Solid Primitive", "Subtract (Drill Hole)",
+                                              "Union (Boss Hub)", "Intersect (Box ^ Sphere)",
+                                              "Hollow Cylinder Pipe"};
+                    if (ImGui::Combo("CSG Op", &obj.params.csgMode, csgItems,
+                                     IM_ARRAYSIZE(csgItems)))
+                    {
                         changed = true;
                     }
-                }
 
-                if (changed)
+                    if (obj.params.csgMode == 0)
+                    {
+                        if (obj.primitiveType == PrimitiveType::Extrude)
+                        {
+                            ImGui::Text("Extruded Solid Part (%zu sketch points)",
+                                        obj.sketchPoints.size());
+                            changed |= drawNumericControl("Extrude Height", &obj.params.height,
+                                                          0.05f, 0.2f, 4.0f, "%.2f", onGeomChanged);
+                        }
+                        else
+                        {
+                            ImGui::Text("Primitive:");
+                            if (ImGui::RadioButton("Box", obj.primitiveType == PrimitiveType::Box))
+                            {
+                                obj.primitiveType = PrimitiveType::Box;
+                                changed = true;
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::RadioButton("Cylinder",
+                                                   obj.primitiveType == PrimitiveType::Cylinder))
+                            {
+                                obj.primitiveType = PrimitiveType::Cylinder;
+                                changed = true;
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::RadioButton("Sphere",
+                                                   obj.primitiveType == PrimitiveType::Sphere))
+                            {
+                                obj.primitiveType = PrimitiveType::Sphere;
+                                changed = true;
+                            }
+                        }
+                    }
+
+                    // Parametric Steppers with direct numpad
+                    if (obj.primitiveType == PrimitiveType::Box || obj.params.csgMode > 0)
+                    {
+                        changed |= drawNumericControl("Width", &obj.params.width, 0.05f, 0.2f, 4.0f,
+                                                      "%.2f", onGeomChanged);
+                        changed |= drawNumericControl("Height", &obj.params.height, 0.05f, 0.2f,
+                                                      4.0f, "%.2f", onGeomChanged);
+                        changed |= drawNumericControl("Depth", &obj.params.depth, 0.05f, 0.2f, 4.0f,
+                                                      "%.2f", onGeomChanged);
+                    }
+                    if (obj.primitiveType == PrimitiveType::Cylinder ||
+                        obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
+                    {
+                        changed |= drawNumericControl("Radius", &obj.params.radius, 0.05f, 0.1f,
+                                                      2.0f, "%.2f", onGeomChanged);
+                    }
+                    if (obj.params.csgMode == 1 || obj.params.csgMode == 4)
+                    {
+                        changed |= drawNumericControl("Hole Radius", &obj.params.holeRadius, 0.02f,
+                                                      0.05f, 1.8f, "%.2f", onGeomChanged);
+                    }
+                    if (obj.primitiveType == PrimitiveType::Cylinder ||
+                        obj.primitiveType == PrimitiveType::Sphere || obj.params.csgMode > 0)
+                    {
+                        float segs = static_cast<float>(obj.params.segments);
+                        if (drawNumericControl("Segments", &segs, 2.0f, 8.0f, 64.0f, "%.0f",
+                                               [&obj, &segs, onGeomChanged]()
+                                               {
+                                                   obj.params.segments = static_cast<int>(segs);
+                                                   onGeomChanged();
+                                               }))
+                        {
+                            obj.params.segments = static_cast<int>(segs);
+                            changed = true;
+                        }
+                    }
+
+                    if (changed)
+                    {
+                        rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                    }
+                }
+            }
+
+            // 4. Display Layers
+            if (ImGui::CollapsingHeader("Display Layers & VSync"))
+            {
+                ImGui::Checkbox("Grid & Triad", &m_showGrid);
+                ImGui::SameLine();
+                ImGui::Checkbox("Solid", &m_showSolid);
+                ImGui::SameLine();
+                ImGui::Checkbox("Wireframe", &m_showWireframe);
+
+                if (ImGui::Checkbox("VSync (120Hz Lock)", &m_vsync))
                 {
-                    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                    m_vsyncChanged = true;
                 }
             }
-        }
 
-        // 4. Display Layers
-        if (ImGui::CollapsingHeader("Display Layers & VSync", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            ImGui::Checkbox("Grid & Triad", &m_showGrid);
-            ImGui::SameLine();
-            ImGui::Checkbox("Solid", &m_showSolid);
-            ImGui::SameLine();
-            ImGui::Checkbox("Wireframe", &m_showWireframe);
-
-            if (ImGui::Checkbox("VSync (120Hz Lock)", &m_vsync))
+            // 5. Watertight Binary STL Export
+            if (ImGui::CollapsingHeader("Binary STL Export"))
             {
-                m_vsyncChanged = true;
+                if (ImGui::Button("Export STL Model", ImVec2(-1.0f, 0.0f)))
+                {
+                    exportSTL();
+                }
+                if (!m_exportStatus.empty())
+                {
+                    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s",
+                                       m_exportStatus.c_str());
+                }
+                ImGui::TextDisabled("Target: /sdcard/Download/mobilecad_part.stl");
             }
-        }
 
-        // 5. Watertight Binary STL Export
-        if (ImGui::CollapsingHeader("Binary STL Export", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            if (ImGui::Button("Export STL Model", ImVec2(-1.0f, 0.0f)))
-            {
-                exportSTL();
-            }
-            if (!m_exportStatus.empty())
-            {
-                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", m_exportStatus.c_str());
-            }
-            ImGui::TextDisabled("Target: /sdcard/Download/mobilecad_part.stl");
-        }
-
-        // 6. Graceful Exit
-        ImGui::Separator();
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.18f, 0.18f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.88f, 0.25f, 0.25f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.12f, 0.12f, 1.0f));
-        if (ImGui::Button("Exit App", ImVec2(-1.0f, 0.0f)))
-        {
-            ImGui::OpenPopup("Confirm Exit");
-        }
-        ImGui::PopStyleColor(3);
-
-        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        if (ImGui::BeginPopupModal("Confirm Exit", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-        {
-            ImGui::Text("Exit MobileCAD and return to Android?");
+            // 6. Graceful Exit
             ImGui::Separator();
-            if (ImGui::Button("Yes, Exit", ImVec2(180, 0)))
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.18f, 0.18f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.88f, 0.25f, 0.25f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.12f, 0.12f, 1.0f));
+            if (ImGui::Button("Exit App", ImVec2(-1.0f, 0.0f)))
             {
-                ImGui::CloseCurrentPopup();
-                if (m_exitCallback)
+                ImGui::OpenPopup("Confirm Exit");
+            }
+            ImGui::PopStyleColor(3);
+
+            ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+            ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+            if (ImGui::BeginPopupModal("Confirm Exit", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::Text("Exit MobileCAD and return to Android?");
+                ImGui::Separator();
+                if (ImGui::Button("Yes, Exit", ImVec2(180, 0)))
                 {
-                    m_exitCallback();
+                    ImGui::CloseCurrentPopup();
+                    if (m_exitCallback)
+                    {
+                        m_exitCallback();
+                    }
                 }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(180, 0)))
+                {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(180, 0)))
-            {
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
         }
+        ImGui::End();
     }
-    ImGui::End();
 
     renderNumpadPopup();
 }
@@ -1693,7 +1809,8 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
                             m_sketchPoints.push_back({hitX, 0.005f, hitZ});
                             rebuildSketchMesh();
                             LOGI(
-                                "Sketch tap at (%.1f, %.1f) -> placed point (%.2f, 0.005, %.2f) "
+                                "Sketch tap at (%.1f, %.1f) -> placed point (%.2f, 0.005, "
+                                "%.2f) "
                                 "[total %zu pts]",
                                 x0, y0, hitX, hitZ, m_sketchPoints.size());
                         }
@@ -1803,7 +1920,8 @@ bool CADApp::drawFrame()
         !m_renderPass)
     {
         LOGE(
-            "FATAL: drawFrame #%u — null resource (vkCtx=%p swap=%p pipe=%p linePipe=%p layout=%p "
+            "FATAL: drawFrame #%u — null resource (vkCtx=%p swap=%p pipe=%p linePipe=%p "
+            "layout=%p "
             "rp=%p)",
             m_drawFrameCount + 1, (void*)m_vkContext.get(), (void*)m_swapchain.get(),
             (void*)m_pipeline, (void*)m_linePipeline, (void*)m_pipelineLayout, (void*)m_renderPass);

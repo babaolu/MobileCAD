@@ -223,6 +223,9 @@ class CADApp
     // Lifecycle exit callback
     std::function<void()> m_exitCallback;
 
+    // UI toolbar state
+    bool m_showMenu{true};
+
     // Scene geometry & Multi-object scene graph
     std::vector<SceneObject> m_objects;
     int m_selectedIndex{0};
