@@ -101,6 +101,37 @@ struct Ray
         tHit = tmin;
         return true;
     }
+
+    static bool intersectTriangle(const Ray& ray, const Vec3f& v0, const Vec3f& v1, const Vec3f& v2,
+                                  float& tOut) noexcept
+    {
+        const Vec3f e1 = v1 - v0;
+        const Vec3f e2 = v2 - v0;
+        const Vec3f p = ray.dir.cross(e2);
+        const float det = e1.dot(p);
+
+        if (std::abs(det) < 1e-7f)
+            return false;
+
+        const float invDet = 1.0f / det;
+        const Vec3f tvec = ray.origin - v0;
+        const float u = tvec.dot(p) * invDet;
+        if (u < 0.0f || u > 1.0f)
+            return false;
+
+        const Vec3f q = tvec.cross(e1);
+        const float v = ray.dir.dot(q) * invDet;
+        if (v < 0.0f || (u + v) > 1.0f)
+            return false;
+
+        const float t = e2.dot(q) * invDet;
+        if (t > 1e-5f)
+        {
+            tOut = t;
+            return true;
+        }
+        return false;
+    }
 };
 
 }  // namespace utils::math

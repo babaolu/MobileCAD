@@ -736,6 +736,8 @@ void CADApp::extrudeSketchToPart()
     if (m_sketchPoints.size() < 3 || !m_vkContext)
         return;
 
+    pushUndoState();
+
     SceneObject newObj;
     newObj.name = "Extrude_" + std::to_string(m_objects.size() + 1);
     newObj.primitiveType = PrimitiveType::Extrude;
@@ -773,6 +775,8 @@ void CADApp::revolveSketchToPart()
 {
     if (m_sketchPoints.size() < 3 || !m_vkContext)
         return;
+
+    pushUndoState();
 
     SceneObject newObj;
     newObj.name = "Revolve_" + std::to_string(m_objects.size() + 1);
@@ -812,6 +816,7 @@ void CADApp::setPrimitive(PrimitiveType type)
 {
     if (m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_objects.size()))
     {
+        pushUndoState();
         m_objects[m_selectedIndex].params.csgMode = 0;
         m_objects[m_selectedIndex].primitiveType = type;
         rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
@@ -879,6 +884,8 @@ void CADApp::applyCsgSubtract()
         m_csgStatus = "Subtract: No -ve cutter objects in scene";
         return;
     }
+
+    pushUndoState();
 
     // 3. Union all participating cutters in world space
     manifold::Manifold combinedCutters;
@@ -991,6 +998,8 @@ void CADApp::applyUnionOrGroup()
         m_csgStatus = "Union/Group requires at least 2 selected +ve objects";
         return;
     }
+
+    pushUndoState();
 
     // Check if any pair of selected objects touch or intersect
     bool anyTouching = false;
@@ -1443,6 +1452,237 @@ bool CADApp::loadWorkspace()
     return true;
 }
 
+HistoryState CADApp::captureCurrentState() const
+{
+    HistoryState state;
+    state.selectedIndex = m_selectedIndex;
+    state.objects.reserve(m_objects.size());
+    for (const auto& obj : m_objects)
+    {
+        SceneObjectSnapshot snap;
+        snap.name = obj.name;
+        snap.primitiveType = obj.primitiveType;
+        snap.params = obj.params;
+        snap.sketchPoints = obj.sketchPoints;
+        snap.position = obj.position;
+        snap.rotationDeg = obj.rotationDeg;
+        snap.scale = obj.scale;
+        snap.isSelected = obj.isSelected;
+        snap.isNegative = obj.isNegative;
+        snap.aabbMin = obj.aabbMin;
+        snap.aabbMax = obj.aabbMax;
+        snap.cpuVertices = obj.cpuVertices;
+        snap.cpuIndices = obj.cpuIndices;
+        state.objects.push_back(std::move(snap));
+    }
+    return state;
+}
+
+void CADApp::restoreState(const HistoryState& state)
+{
+    if (!m_vkContext)
+        return;
+
+    auto device = m_vkContext->getDevice();
+    auto physDevice = m_vkContext->getPhysicalDevice();
+    vkDeviceWaitIdle(device);
+
+    m_objects.clear();
+    m_objects.reserve(state.objects.size());
+
+    for (const auto& snap : state.objects)
+    {
+        SceneObject obj;
+        obj.name = snap.name;
+        obj.primitiveType = snap.primitiveType;
+        obj.params = snap.params;
+        obj.sketchPoints = snap.sketchPoints;
+        obj.position = snap.position;
+        obj.rotationDeg = snap.rotationDeg;
+        obj.scale = snap.scale;
+        obj.isSelected = snap.isSelected;
+        obj.isNegative = snap.isNegative;
+        obj.aabbMin = snap.aabbMin;
+        obj.aabbMax = snap.aabbMax;
+        obj.cpuVertices = snap.cpuVertices;
+        obj.cpuIndices = snap.cpuIndices;
+
+        if (!obj.cpuVertices.empty() && obj.cpuIndices.size() >= 3)
+        {
+            obj.solidMesh = std::make_unique<rendering::MeshBuffer>(
+                device, physDevice, obj.cpuVertices, obj.cpuIndices);
+
+            auto wireLines =
+                geometry::Primitives::createWireframeLines(obj.cpuVertices, obj.cpuIndices);
+            obj.wireframeMesh =
+                std::make_unique<rendering::MeshBuffer>(device, physDevice, wireLines);
+
+            auto selectedWireLines = wireLines;
+            for (auto& v : selectedWireLines)
+            {
+                v.color[0] = 1.0f;
+                v.color[1] = 0.78f;
+                v.color[2] = 0.10f;
+            }
+            obj.selectedWireframeMesh =
+                std::make_unique<rendering::MeshBuffer>(device, physDevice, selectedWireLines);
+
+            obj.localManifold = obj.buildManifoldFromMesh();
+        }
+
+        m_objects.push_back(std::move(obj));
+    }
+
+    m_selectedIndex = state.selectedIndex;
+    if (m_selectedIndex >= static_cast<int>(m_objects.size()))
+    {
+        m_selectedIndex = m_objects.empty() ? -1 : static_cast<int>(m_objects.size() - 1);
+    }
+}
+
+void CADApp::pushUndoState()
+{
+    m_undoStack.push_back(captureCurrentState());
+    if (m_undoStack.size() > kMaxHistory)
+    {
+        m_undoStack.erase(m_undoStack.begin());
+    }
+    m_redoStack.clear();
+}
+
+void CADApp::undo()
+{
+    if (m_undoStack.empty())
+        return;
+
+    m_redoStack.push_back(captureCurrentState());
+    HistoryState prev = std::move(m_undoStack.back());
+    m_undoStack.pop_back();
+    restoreState(prev);
+    LOGI("Undo executed. History stack: %zu undo, %zu redo", m_undoStack.size(),
+         m_redoStack.size());
+}
+
+void CADApp::redo()
+{
+    if (m_redoStack.empty())
+        return;
+
+    m_undoStack.push_back(captureCurrentState());
+    HistoryState next = std::move(m_redoStack.back());
+    m_redoStack.pop_back();
+    restoreState(next);
+    LOGI("Redo executed. History stack: %zu undo, %zu redo", m_undoStack.size(),
+         m_redoStack.size());
+}
+
+void CADApp::renderCaliperOverlay()
+{
+    if (m_measurePointCount < 1 || !m_swapchain)
+        return;
+
+    float screenW = static_cast<float>(getSwapchainExtentW());
+    float screenH = static_cast<float>(getSwapchainExtentH());
+    if (screenW <= 0.0f || screenH <= 0.0f)
+        return;
+
+    float aspect = screenW / screenH;
+    auto vp = m_camera.getViewProjectionMatrix(aspect);
+
+    auto projectWorldToScreen = [&](const utils::math::Vec3f& worldPos,
+                                    ImVec2& outScreenPos) -> bool
+    {
+        float w = vp(3, 0) * worldPos.x + vp(3, 1) * worldPos.y + vp(3, 2) * worldPos.z + vp(3, 3);
+        if (w <= 0.001f)
+            return false;
+
+        float x = vp(0, 0) * worldPos.x + vp(0, 1) * worldPos.y + vp(0, 2) * worldPos.z + vp(0, 3);
+        float y = vp(1, 0) * worldPos.x + vp(1, 1) * worldPos.y + vp(1, 2) * worldPos.z + vp(1, 3);
+
+        float ndcX = x / w;
+        float ndcY = y / w;
+
+        outScreenPos.x = (ndcX + 1.0f) * 0.5f * screenW;
+        outScreenPos.y = (ndcY + 1.0f) * 0.5f * screenH;
+        return true;
+    };
+
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+    if (!drawList)
+        return;
+
+    ImVec2 screenA;
+    bool visA = projectWorldToScreen(m_measurePtA, screenA);
+
+    if (visA)
+    {
+        // Draw CAD Magenta Point A marker
+        drawList->AddCircleFilled(screenA, 8.0f, IM_COL32(255, 60, 180, 255));
+        drawList->AddCircle(screenA, 13.0f, IM_COL32(255, 255, 255, 240), 20, 2.5f);
+        drawList->AddCircle(screenA, 17.0f, IM_COL32(255, 60, 180, 120), 20, 1.5f);
+        drawList->AddText(ImVec2(screenA.x + 16.0f, screenA.y - 12.0f),
+                          IM_COL32(255, 255, 255, 255), "Point A");
+    }
+
+    if (m_measurePointCount >= 2)
+    {
+        ImVec2 screenB;
+        bool visB = projectWorldToScreen(m_measurePtB, screenB);
+
+        if (visB)
+        {
+            // Draw CAD Cyan Point B marker
+            drawList->AddCircleFilled(screenB, 8.0f, IM_COL32(40, 220, 255, 255));
+            drawList->AddCircle(screenB, 13.0f, IM_COL32(255, 255, 255, 240), 20, 2.5f);
+            drawList->AddCircle(screenB, 17.0f, IM_COL32(40, 220, 255, 120), 20, 1.5f);
+            drawList->AddText(ImVec2(screenB.x + 16.0f, screenB.y - 12.0f),
+                              IM_COL32(255, 255, 255, 255), "Point B");
+        }
+
+        if (visA && visB)
+        {
+            // Draw dimension line
+            drawList->AddLine(screenA, screenB, IM_COL32(255, 240, 90, 255), 2.5f);
+
+            // Perpendicular tick marks at ends
+            float dx = screenB.x - screenA.x;
+            float dy = screenB.y - screenA.y;
+            float lineLen = std::hypot(dx, dy);
+            if (lineLen > 1e-3f)
+            {
+                float nx = -dy / lineLen * 9.0f;
+                float ny = dx / lineLen * 9.0f;
+                drawList->AddLine(ImVec2(screenA.x - nx, screenA.y - ny),
+                                  ImVec2(screenA.x + nx, screenA.y + ny),
+                                  IM_COL32(255, 255, 255, 255), 2.0f);
+                drawList->AddLine(ImVec2(screenB.x - nx, screenB.y - ny),
+                                  ImVec2(screenB.x + nx, screenB.y + ny),
+                                  IM_COL32(255, 255, 255, 255), 2.0f);
+            }
+
+            // High-contrast floating dimension badge at midpoint
+            utils::math::Vec3f delta = m_measurePtB - m_measurePtA;
+            float dist = delta.length();
+            char badgeText[64];
+            snprintf(badgeText, sizeof(badgeText), "L = %.3f", dist);
+
+            ImVec2 midScreen((screenA.x + screenB.x) * 0.5f, (screenA.y + screenB.y) * 0.5f);
+            ImVec2 txtSize = ImGui::CalcTextSize(badgeText);
+            float padX = 8.0f;
+            float padY = 5.0f;
+            ImVec2 bMin(midScreen.x - txtSize.x * 0.5f - padX,
+                        midScreen.y - txtSize.y * 0.5f - padY);
+            ImVec2 bMax(midScreen.x + txtSize.x * 0.5f + padX,
+                        midScreen.y + txtSize.y * 0.5f + padY);
+
+            drawList->AddRectFilled(bMin, bMax, IM_COL32(18, 22, 30, 235), 6.0f);
+            drawList->AddRect(bMin, bMax, IM_COL32(255, 240, 90, 255), 6.0f, 0, 1.8f);
+            drawList->AddText(ImVec2(bMin.x + padX, bMin.y + padY), IM_COL32(255, 255, 255, 255),
+                              badgeText);
+        }
+    }
+}
+
 void CADApp::initImGui(ANativeWindow* window)
 {
     auto device = m_vkContext->getDevice();
@@ -1771,6 +2011,7 @@ void CADApp::renderNumpadPopup()
         {
             if (m_numpad.targetValue)
             {
+                pushUndoState();
                 try
                 {
                     if (!m_numpad.inputBuffer.empty())
@@ -1836,6 +2077,10 @@ bool CADApp::drawNumericControl(const char* label, float* value, float step, flo
             *value = minVal;
         changed = true;
     }
+    if (ImGui::IsItemActivated())
+    {
+        pushUndoState();
+    }
     ImGui::PopItemFlag();
 
     ImGui::SameLine();
@@ -1863,6 +2108,10 @@ bool CADApp::drawNumericControl(const char* label, float* value, float step, flo
             *value = maxVal;
         changed = true;
     }
+    if (ImGui::IsItemActivated())
+    {
+        pushUndoState();
+    }
     ImGui::PopItemFlag();
 
     ImGui::PopID();
@@ -1885,6 +2134,7 @@ bool CADApp::drawVec3Control(const char* label, utils::math::Vec3f* vec, float s
     ImGui::SameLine();
     if (ImGui::SmallButton("Reset"))
     {
+        pushUndoState();
         vec->x = resetVal;
         vec->y = resetVal;
         vec->z = resetVal;
@@ -1935,6 +2185,10 @@ bool CADApp::drawVec3Control(const char* label, utils::math::Vec3f* vec, float s
                     *axes[i].val = minVal;
                 changed = true;
             }
+            if (ImGui::IsItemActivated())
+            {
+                pushUndoState();
+            }
             ImGui::PopItemFlag();
 
             ImGui::SameLine(0.0f, 2.0f);
@@ -1964,6 +2218,10 @@ bool CADApp::drawVec3Control(const char* label, utils::math::Vec3f* vec, float s
                     *axes[i].val = maxVal;
                 changed = true;
             }
+            if (ImGui::IsItemActivated())
+            {
+                pushUndoState();
+            }
             ImGui::PopItemFlag();
 
             ImGui::PopID();
@@ -1983,6 +2241,7 @@ bool CADApp::drawVec3Control(const char* label, utils::math::Vec3f* vec, float s
 void CADApp::renderImGui()
 {
     renderCompassGizmo();
+    renderCaliperOverlay();
 
     if (!m_showMenu)
     {
@@ -2111,11 +2370,39 @@ void CADApp::renderImGui()
             if (ImGui::Button("Right", ImVec2(presetBtnW, 0.0f)))
             {
                 m_camera.setViewRight();
-            }  // 3. Scene Assembly Section
+            }
+
+            // Undo / Redo History Controls
+            float historyBtnW = (availW - spacing) * 0.5f;
+            std::string undoLabel = "< Undo (" + std::to_string(m_undoStack.size()) + ")";
+            std::string redoLabel = "Redo (" + std::to_string(m_redoStack.size()) + ") >";
+
+            if (m_undoStack.empty())
+                ImGui::BeginDisabled();
+            if (ImGui::Button(undoLabel.c_str(), ImVec2(historyBtnW, 0.0f)))
+            {
+                undo();
+            }
+            if (m_undoStack.empty())
+                ImGui::EndDisabled();
+
+            ImGui::SameLine();
+
+            if (m_redoStack.empty())
+                ImGui::BeginDisabled();
+            if (ImGui::Button(redoLabel.c_str(), ImVec2(historyBtnW, 0.0f)))
+            {
+                redo();
+            }
+            if (m_redoStack.empty())
+                ImGui::EndDisabled();
+
+            // 3. Scene Assembly Section
             if (ImGui::CollapsingHeader("Scene Assembly", ImGuiTreeNodeFlags_DefaultOpen))
             {
                 if (ImGui::Button("+ Add Part"))
                 {
+                    pushUndoState();
                     SceneObject newObj;
                     newObj.name = "Part_" + std::to_string(m_objects.size() + 1);
                     newObj.position = {static_cast<float>(m_objects.size()) * 1.5f, 0.0f, 0.0f};
@@ -2131,6 +2418,7 @@ void CADApp::renderImGui()
                     if (m_selectedIndex >= 0 &&
                         m_selectedIndex < static_cast<int>(m_objects.size()))
                     {
+                        pushUndoState();
                         const auto& src = m_objects[m_selectedIndex];
                         SceneObject dup;
                         dup.name = src.name + "_copy";
@@ -2154,6 +2442,7 @@ void CADApp::renderImGui()
                     if (m_selectedIndex >= 0 &&
                         m_selectedIndex < static_cast<int>(m_objects.size()))
                     {
+                        pushUndoState();
                         m_objects.erase(m_objects.begin() + m_selectedIndex);
                         if (m_objects.empty())
                         {
@@ -2467,6 +2756,7 @@ void CADApp::renderImGui()
                         if (ImGui::Combo("CSG Op", &obj.params.csgMode, csgItems,
                                          IM_ARRAYSIZE(csgItems)))
                         {
+                            pushUndoState();
                             changed = true;
                         }
 
@@ -2514,6 +2804,7 @@ void CADApp::renderImGui()
                                 if (ImGui::RadioButton("Box",
                                                        obj.primitiveType == PrimitiveType::Box))
                                 {
+                                    pushUndoState();
                                     obj.primitiveType = PrimitiveType::Box;
                                     changed = true;
                                 }
@@ -2521,6 +2812,7 @@ void CADApp::renderImGui()
                                 if (ImGui::RadioButton(
                                         "Cylinder", obj.primitiveType == PrimitiveType::Cylinder))
                                 {
+                                    pushUndoState();
                                     obj.primitiveType = PrimitiveType::Cylinder;
                                     changed = true;
                                 }
@@ -2528,6 +2820,7 @@ void CADApp::renderImGui()
                                 if (ImGui::RadioButton("Sphere",
                                                        obj.primitiveType == PrimitiveType::Sphere))
                                 {
+                                    pushUndoState();
                                     obj.primitiveType = PrimitiveType::Sphere;
                                     changed = true;
                                 }
@@ -2580,7 +2873,48 @@ void CADApp::renderImGui()
                 }
             }
 
-            // 4. Display Layers
+            // 3D Point-to-Point Caliper & Measurement
+            if (ImGui::CollapsingHeader("3D Caliper & Measure"))
+            {
+                ImGui::Checkbox("3D Measure Mode (Tap 2 Surface Points)", &m_measureMode);
+                ImGui::Checkbox("Snap to Exact Mesh Corners/Vertices", &m_measureSnapVertex);
+
+                if (ImGui::Button("Clear Measurement", ImVec2(-1.0f, 0.0f)))
+                {
+                    clearMeasurement();
+                }
+
+                if (m_measurePointCount == 0)
+                {
+                    ImGui::TextDisabled("(Tap any 3D object surface or grid to place Point A)");
+                }
+                else if (m_measurePointCount == 1)
+                {
+                    ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.70f, 1.0f),
+                                       "Point A: (%.3f, %.3f, %.3f)", m_measurePtA.x,
+                                       m_measurePtA.y, m_measurePtA.z);
+                    ImGui::TextDisabled("(Tap second surface point to place Point B)");
+                }
+                else if (m_measurePointCount >= 2)
+                {
+                    utils::math::Vec3f delta = m_measurePtB - m_measurePtA;
+                    float dist = delta.length();
+
+                    ImGui::TextColored(ImVec4(1.0f, 0.25f, 0.70f, 1.0f),
+                                       "Point A: (%.3f, %.3f, %.3f)", m_measurePtA.x,
+                                       m_measurePtA.y, m_measurePtA.z);
+                    ImGui::TextColored(ImVec4(0.25f, 0.90f, 1.0f, 1.0f),
+                                       "Point B: (%.3f, %.3f, %.3f)", m_measurePtB.x,
+                                       m_measurePtB.y, m_measurePtB.z);
+
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.35f, 1.0f), "Distance L = %.4f", dist);
+                    ImGui::Text("Delta: |dX|=%.4f, |dY|=%.4f, |dZ|=%.4f", std::abs(delta.x),
+                                std::abs(delta.y), std::abs(delta.z));
+                }
+            }
+
+            // Display Layers & VSync
             if (ImGui::CollapsingHeader("Display Layers & VSync"))
             {
                 ImGui::Checkbox("Grid & Triad", &m_showGrid);
@@ -2848,7 +3182,127 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
                 auto viewProj = m_camera.getViewProjectionMatrix(aspect);
                 auto ray = utils::math::Ray::screenPointToRay(x0, y0, screenW, screenH, viewProj);
 
-                if (m_sketchMode)
+                if (m_measureMode)
+                {
+                    bool hitSurface = false;
+                    float closestDist = 1e30f;
+                    utils::math::Vec3f bestWorldHit{0.0f, 0.0f, 0.0f};
+                    utils::math::Vec3f hitTriVerts[3];
+                    bool hasHitTriangle = false;
+
+                    for (const auto& obj : m_objects)
+                    {
+                        if (obj.cpuVertices.empty() || obj.cpuIndices.size() < 3)
+                            continue;
+
+                        auto model = obj.getModelMatrix();
+                        auto invModel = model.inverted();
+
+                        utils::math::Ray localRay;
+                        localRay.origin = invModel * ray.origin;
+                        localRay.dir = invModel.transformDirection(ray.dir).normalized();
+
+                        float tAABB = 0.0f;
+                        if (!utils::math::Ray::intersectAABB(localRay, obj.aabbMin, obj.aabbMax,
+                                                             tAABB))
+                            continue;
+
+                        for (size_t ti = 0; ti + 2 < obj.cpuIndices.size(); ti += 3)
+                        {
+                            uint32_t i0 = obj.cpuIndices[ti];
+                            uint32_t i1 = obj.cpuIndices[ti + 1];
+                            uint32_t i2 = obj.cpuIndices[ti + 2];
+
+                            if (i0 >= obj.cpuVertices.size() || i1 >= obj.cpuVertices.size() ||
+                                i2 >= obj.cpuVertices.size())
+                                continue;
+
+                            utils::math::Vec3f lv0{obj.cpuVertices[i0].position[0],
+                                                   obj.cpuVertices[i0].position[1],
+                                                   obj.cpuVertices[i0].position[2]};
+                            utils::math::Vec3f lv1{obj.cpuVertices[i1].position[0],
+                                                   obj.cpuVertices[i1].position[1],
+                                                   obj.cpuVertices[i1].position[2]};
+                            utils::math::Vec3f lv2{obj.cpuVertices[i2].position[0],
+                                                   obj.cpuVertices[i2].position[1],
+                                                   obj.cpuVertices[i2].position[2]};
+
+                            float tTri = 0.0f;
+                            if (utils::math::Ray::intersectTriangle(localRay, lv0, lv1, lv2, tTri))
+                            {
+                                utils::math::Vec3f localHit = localRay.origin + localRay.dir * tTri;
+                                utils::math::Vec3f worldHit = model * localHit;
+                                float dist = (worldHit - ray.origin).length();
+                                if (dist < closestDist)
+                                {
+                                    closestDist = dist;
+                                    bestWorldHit = worldHit;
+                                    hitSurface = true;
+                                    hasHitTriangle = true;
+                                    hitTriVerts[0] = model * lv0;
+                                    hitTriVerts[1] = model * lv1;
+                                    hitTriVerts[2] = model * lv2;
+                                }
+                            }
+                        }
+                    }
+
+                    if (hitSurface && hasHitTriangle && m_measureSnapVertex)
+                    {
+                        float bestSnapDist = 0.18f;
+                        for (int vi = 0; vi < 3; ++vi)
+                        {
+                            float d = (hitTriVerts[vi] - bestWorldHit).length();
+                            if (d < bestSnapDist)
+                            {
+                                bestSnapDist = d;
+                                bestWorldHit = hitTriVerts[vi];
+                            }
+                        }
+                    }
+
+                    if (!hitSurface)
+                    {
+                        // Fallback to ground plane Y = 0
+                        if (std::abs(ray.dir.y) > 1e-4f)
+                        {
+                            float t = -ray.origin.y / ray.dir.y;
+                            if (t > 0.0f)
+                            {
+                                bestWorldHit = {ray.origin.x + t * ray.dir.x, 0.0f,
+                                                ray.origin.z + t * ray.dir.z};
+                                if (m_snapToGrid)
+                                {
+                                    bestWorldHit.x = std::round(bestWorldHit.x / 0.25f) * 0.25f;
+                                    bestWorldHit.z = std::round(bestWorldHit.z / 0.25f) * 0.25f;
+                                }
+                                hitSurface = true;
+                            }
+                        }
+                    }
+
+                    if (hitSurface)
+                    {
+                        if (m_measurePointCount == 0 || m_measurePointCount == 2)
+                        {
+                            m_measurePtA = bestWorldHit;
+                            m_measurePointCount = 1;
+                            LOGI("3D Caliper: Placed Point A at (%.3f, %.3f, %.3f)", m_measurePtA.x,
+                                 m_measurePtA.y, m_measurePtA.z);
+                        }
+                        else if (m_measurePointCount == 1)
+                        {
+                            m_measurePtB = bestWorldHit;
+                            m_measurePointCount = 2;
+                            float dist = (m_measurePtB - m_measurePtA).length();
+                            LOGI(
+                                "3D Caliper: Placed Point B at (%.3f, %.3f, %.3f), Distance L = "
+                                "%.3f",
+                                m_measurePtB.x, m_measurePtB.y, m_measurePtB.z, dist);
+                        }
+                    }
+                }
+                else if (m_sketchMode)
                 {
                     // Intersect with ground plane Y = 0
                     if (std::abs(ray.dir.y) > 1e-4f)

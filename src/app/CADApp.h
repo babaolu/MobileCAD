@@ -196,6 +196,29 @@ struct SceneObject
     }
 };
 
+struct SceneObjectSnapshot
+{
+    std::string name;
+    PrimitiveType primitiveType{PrimitiveType::Box};
+    PrimitiveParams params;
+    std::vector<utils::math::Vec3f> sketchPoints;
+    utils::math::Vec3f position;
+    utils::math::Vec3f rotationDeg;
+    utils::math::Vec3f scale;
+    bool isSelected{false};
+    bool isNegative{false};
+    utils::math::Vec3f aabbMin;
+    utils::math::Vec3f aabbMax;
+    std::vector<Vertex> cpuVertices;
+    std::vector<uint32_t> cpuIndices;
+};
+
+struct HistoryState
+{
+    std::vector<SceneObjectSnapshot> objects;
+    int selectedIndex{-1};
+};
+
 class CADApp
 {
    public:
@@ -234,6 +257,25 @@ class CADApp
     void revolveSketchToPart();
     bool isSketchMode() const { return m_sketchMode; }
     void setSketchMode(bool enabled) { m_sketchMode = enabled; }
+
+    // History & Undo / Redo controls
+    HistoryState captureCurrentState() const;
+    void restoreState(const HistoryState& state);
+    void pushUndoState();
+    void undo();
+    void redo();
+    size_t getUndoCount() const { return m_undoStack.size(); }
+    size_t getRedoCount() const { return m_redoStack.size(); }
+
+    // 3D Point-to-Point Caliper & Measurement controls
+    bool isMeasureMode() const { return m_measureMode; }
+    void setMeasureMode(bool enabled) { m_measureMode = enabled; }
+    void clearMeasurement()
+    {
+        m_measurePointCount = 0;
+        m_measurePtA = {0.0f, 0.0f, 0.0f};
+        m_measurePtB = {0.0f, 0.0f, 0.0f};
+    }
 
     std::vector<SceneObject>& getObjects() { return m_objects; }
     const std::vector<SceneObject>& getObjects() const { return m_objects; }
@@ -358,6 +400,19 @@ class CADApp
     float m_revolveOffset{0.35f};
     std::vector<utils::math::Vec3f> m_sketchPoints;
     std::unique_ptr<rendering::MeshBuffer> m_sketchLineMesh;
+
+    // History state
+    static constexpr size_t kMaxHistory = 20;
+    std::vector<HistoryState> m_undoStack;
+    std::vector<HistoryState> m_redoStack;
+
+    // 3D Caliper & Measurement state
+    bool m_measureMode{false};
+    bool m_measureSnapVertex{true};
+    int m_measurePointCount{0};
+    utils::math::Vec3f m_measurePtA{0.0f, 0.0f, 0.0f};
+    utils::math::Vec3f m_measurePtB{0.0f, 0.0f, 0.0f};
+    void renderCaliperOverlay();
 
     // Sync per-frame
     uint32_t m_currentFrame{0};
