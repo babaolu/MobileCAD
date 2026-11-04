@@ -2579,10 +2579,431 @@ bool CADApp::drawVec3Control(const char* label, utils::math::Vec3f* vec, float s
     return changed;
 }
 
+void CADApp::renderHelpWindow()
+{
+    float screenW = ImGui::GetIO().DisplaySize.x;
+    float screenH = ImGui::GetIO().DisplaySize.y;
+
+    ImGui::SetNextWindowPos(ImVec2(18.0f, 110.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(screenW - 36.0f, screenH - 160.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(400.0f, 300.0f),
+                                        ImVec2(screenW - 20.0f, screenH - 120.0f));
+    ImGui::SetNextWindowBgAlpha(0.96f);
+
+    if (!ImGui::Begin("MobileCAD Help & User Guide", &m_showHelpWindow,
+                      ImGuiWindowFlags_NoCollapse))
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImVec2 curPos = ImGui::GetWindowPos();
+    if (curPos.y < 100.0f)
+    {
+        ImGui::SetWindowPos(ImVec2(curPos.x, 110.0f));
+    }
+
+    ImGui::PushTextWrapPos(0.0f);
+
+    // Header & Quick Close Button
+    ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                       "MobileCAD Studio v1.1.0 - In-App User Guide");
+    ImGui::SameLine();
+    float closeBtnW = 105.0f;
+    float rightEdge = ImGui::GetWindowContentRegionMax().x;
+    float closeTargetX = rightEdge - closeBtnW;
+    if (ImGui::GetCursorPosX() < closeTargetX)
+    {
+        ImGui::SameLine(closeTargetX);
+    }
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.20f, 0.20f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.88f, 0.28f, 0.28f, 1.0f));
+    if (ImGui::SmallButton("Close Guide"))
+    {
+        m_showHelpWindow = false;
+    }
+    ImGui::PopStyleColor(2);
+
+    ImGui::TextColored(
+        ImVec4(0.75f, 0.78f, 0.82f, 1.0f),
+        "Complete guide to touch navigation, precision numpad, CSG booleans, S-Pen sketching, "
+        "PBR materials, caliper, and 3D export.");
+    ImGui::Separator();
+
+    // Toggle: [x] Expand All Sections
+    ImGui::Checkbox("Expand All Sections (Continuous Scroll)", &m_helpExpandAll);
+    ImGui::SameLine();
+    ImGui::TextDisabled("| Category Tabs:");
+
+    const char* tabNames[] = {"1. Viewport",     "2. UI & Numpad",   "3. Assembly",
+                              "4. CSG Booleans", "5. 2D Sketch",     "6. Materials",
+                              "7. 3D Caliper",   "8. Files / Export"};
+
+    if (!m_helpExpandAll)
+    {
+        float contentW = ImGui::GetContentRegionAvail().x;
+        float spacingX = ImGui::GetStyle().ItemSpacing.x;
+        float btnW4 = (contentW - spacingX * 3.0f) * 0.25f;
+        if (btnW4 < 90.0f)
+            btnW4 = 90.0f;
+        for (int i = 0; i < 8; ++i)
+        {
+            if (i > 0 && i % 4 != 0)
+            {
+                ImGui::SameLine();
+            }
+            bool isCurrent = (m_helpTab == i);
+            if (isCurrent)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.50f, 0.85f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+            }
+            else
+            {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.22f, 0.28f, 0.9f));
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.80f, 0.85f, 0.90f, 1.0f));
+            }
+            if (ImGui::Button(tabNames[i], ImVec2(btnW4, 34.0f)))
+            {
+                m_helpTab = i;
+            }
+            ImGui::PopStyleColor(2);
+        }
+        ImGui::Separator();
+    }
+
+    auto bulletItem = [](const char* heading, const char* body)
+    {
+        ImGui::Bullet();
+        ImGui::TextColored(ImVec4(0.40f, 0.85f, 1.0f, 1.0f), "%s", heading);
+        ImGui::Indent(22.0f);
+        ImGui::TextWrapped("%s", body);
+        ImGui::Unindent(22.0f);
+        ImGui::Spacing();
+    };
+
+    auto renderSection0 = [&]()
+    {
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                           "1. 3D Viewport Navigation & Touch Gestures");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        bulletItem(
+            "1-Finger Drag (Touch & S-Pen)",
+            "Orbit camera around the scene origin using smooth spherical Arcball kinematics. "
+            "S-Pen tip offers sub-pixel rotational control for inspecting tight mechanical "
+            "assemblies.");
+
+        bulletItem(
+            "2-Finger Pinch",
+            "Smooth, logarithmic zoom in and out. Maintains steady sensitivity from close-up "
+            "millimeter details to expansive multi-part scenes.");
+
+        bulletItem("2-Finger Slide / Drag",
+                   "Pan camera focus point along the camera-relative viewing plane.");
+
+        bulletItem(
+            "Single Tap in 3D Space",
+            "High-precision ray casting. Tapping any 3D solid or surface selects it, highlights "
+            "its geometry, and populates the inspector. Tapping empty background space clears "
+            "selection.");
+
+        bulletItem("Camera Presets (Reset, Iso, Front, Top, Right)",
+                   "Instant 1-tap alignment to canonical engineering projections. 'Reset' restores "
+                   "the default 45-deg isometric view.");
+
+        bulletItem(
+            "Interactive Compass Gizmo",
+            "Real-time 3D orientation indicator pinned at the top-right corner. Shows red (X), "
+            "green (Y), and blue (Z) axes rotating synchronously with the viewport camera.");
+    };
+
+    auto renderSection1 = [&]()
+    {
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                           "2. Precise Numeric Steppers, Direct Typing & Undo / Redo");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        bulletItem("Dual Fine & Coarse Steppers",
+                   "Every dimension and transform features [-] / [+] steppers for fine adjustments "
+                   "and [--] / [++] for coarse 10x steps.");
+
+        bulletItem("Long-Press Hold-to-Repeat",
+                   "Press and hold any stepper button to continuously scroll values without "
+                   "exhausting finger taps.");
+
+        bulletItem("On-Screen Touch Numpad",
+                   "Tap directly on any numeric value box (e.g. [ 1.20 ]) to open the full "
+                   "on-screen keypad. "
+                   "Features digits 0-9, decimal point [.], +/- sign toggle, backspace [<-], "
+                   "[Clear], and [OK]. "
+                   "Inputs are automatically clamped to valid mathematical bounds.");
+
+        bulletItem(
+            "Zero-Lag Undo / Redo History Stack",
+            "20-level non-blocking CPU history snapshots. Every transform, geometry change, "
+            "boolean cut/union, "
+            "sketch point, and material assignment is fully reversible via [< Undo] and [Redo >].");
+    };
+
+    auto renderSection2 = [&]()
+    {
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                           "3. Multi-Part Scene Assembly & 3D Transforms");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        bulletItem(
+            "Parametric Solids",
+            "Choose from Box, Cylinder, Cone, Sphere, Torus, or Extruded/Revolved 2D profiles. "
+            "Configure dimensions and tap [+ Add Part] to instantiate a new part in the scene.");
+
+        bulletItem("Part Hierarchy & Selection",
+                   "Switch active parts using the dropdown selector, parts list, or direct 3D "
+                   "ray-cast viewport tap.");
+
+        bulletItem("Duplicate & Delete",
+                   "[Duplicate Part] clones the selected part with all transforms, materials, and "
+                   "geometry with a slight offset. "
+                   "[Delete Part] removes it from the scene (fully recoverable via Undo).");
+
+        bulletItem("3D Spatial Transforms",
+                   "Full 9-DOF positioning (X, Y, Z in units), Euler rotation (Pitch, Yaw, Roll in "
+                   "degrees), and uniform or non-uniform scaling (X, Y, Z).");
+
+        bulletItem("Multi-Select Tap Mode",
+                   "Check [x] Multi-Select Tap Mode to select multiple solids simultaneously in "
+                   "the viewport for batch transforms or boolean grouping.");
+    };
+
+    auto renderSection3 = [&]()
+    {
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                           "4. Constructive Solid Geometry (Boolean Subtract & Union)");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        bulletItem("Solid (+ve) vs Cutter (-ve Hologram)",
+                   "Solids (+ve) render with opaque PBR shading. Cutters (-ve) render as "
+                   "translucent ruby hologram ghosts "
+                   "(alpha = 0.38) with wireframe contours so you can position drill cavities and "
+                   "slots inside solid bodies with sub-millimeter precision.");
+
+        bulletItem(
+            "Step-by-Step CSG Subtract (Drilling / Hollowing)",
+            "1. Add or select your base solid part (marked +ve Solid).\n"
+            "2. Add your cutting tool (e.g. a Cylinder or custom shape).\n"
+            "3. Check [x] Negative Cutter (-ve) on the cutter part; it turns into a ruby ghost.\n"
+            "4. Position and rotate the cutter intersecting the base solid.\n"
+            "5. Select the base solid, then tap [ Apply CSG Subtract ].\n"
+            "6. The cutter volume is carved out with clean manifold boundaries and auto-split "
+            "crease normals.");
+
+        bulletItem("CSG Union & Assembly Grouping",
+                   "Select multiple touching parts and tap [ Union / Group ] to weld them into a "
+                   "single watertight solid. "
+                   "If parts do not touch, they are grouped into a compound assembly preserving "
+                   "individual transforms.");
+    };
+
+    auto renderSection4 = [&]()
+    {
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                           "5. 2D S-Pen Sketching, Extrude (Bevel/Chamfer) & 3D Revolve");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        bulletItem("Sketch Mode Activation",
+                   "Tap [ Sketch Mode: OFF -> ON ] to lock the viewport to an overhead 2D drafting "
+                   "plane with coordinate grid snapping.");
+
+        bulletItem("9 Specialized 2D Drafting Tools",
+                   "- Polyline: Tap points to construct sharp mechanical polygons.\n"
+                   "- Freehand: Natural drawing with S-Pen or finger; automatically filters jitter "
+                   "and welds points.\n"
+                   "- Smooth Curve: Closed Catmull-Rom spline evaluating smooth tangent curvature "
+                   "through control points.\n"
+                   "- Wave: Parametric sinusoidal undulating curve for heat sinks, grips, and "
+                   "corrugated structures.\n"
+                   "- Circle / Ellipse: Parametric circular cross-sections with configurable "
+                   "radius and segment resolution.\n"
+                   "- Square / Rectangle / Triangle: Standard geometric profiles with configurable "
+                   "dimensions.");
+
+        bulletItem("3D Extrusion with Bevel / Chamfer",
+                   "Set Extrude Height to pull 2D sketch into a 3D solid prism. Configure Bevel "
+                   "Width and Bevel Segments to apply "
+                   "smooth rounded fillets or angled chamfers along top and bottom edges. Tap [ "
+                   "Extrude 2D Sketch to 3D Part ] to instantiate.");
+
+        bulletItem("3D Revolve / Lathe Tool",
+                   "Revolve 2D profile around a central lathe axis (0 to 360 deg). Configure "
+                   "Revolve Angle, Radial Offset (distance from lathe axis), "
+                   "and Angular Segments. Perfect for creating bottles, vases, pulleys, wheels, "
+                   "shafts, and axisymmetric mechanical parts. "
+                   "Tap [ Revolve Sketch to 3D Part ] to instantiate.");
+    };
+
+    auto renderSection5 = [&]()
+    {
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                           "6. Studio PBR Materials & Per-Surface Customization");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        bulletItem("Cook-Torrance GGX PBR Shading",
+                   "Physically Based Rendering with GGX microfacet distribution, Schlick-Fresnel "
+                   "approximation, and Smith geometric shadowing. "
+                   "Realistic metallic specular highlights, camera-relative view reflections, and "
+                   "roughness blur.");
+
+        bulletItem("9 Industrial Material Presets",
+                   "Default Aluminium, Stainless Steel (high-specular mirror sheen), Anodized "
+                   "Titanium, Polished Brass / Gold, Chrome Finish, "
+                   "Matte Red ABS, Gloss White PLA, Carbon Fiber / Polymer, and Safety Orange.");
+
+        bulletItem("Whole Part vs Per-Surface Face Painting",
+                   "By default, applying a preset coats the entire 3D part. Set target to "
+                   "'Specific Surface / Face' to customize individual faces.");
+
+        bulletItem("Direct 3D Face Picking",
+                   "Check [x] Tap 3D Face to Pick Surface, then tap directly on any face in the 3D "
+                   "viewport to inspect and paint only that surface "
+                   "(e.g. paint cylinder caps different from cylinder walls, or highlight cut "
+                   "surfaces after a CSG subtract).");
+    };
+
+    auto renderSection6 = [&]()
+    {
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                           "7. 3D Surface Caliper & Point-to-Point Measurement");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        bulletItem("Point-to-Point 3D Measurement",
+                   "Tap [ Caliper: Measure 3D Distance ] to activate measurement mode. Tap any "
+                   "surface or edge on your 3D parts to place "
+                   "Point A (green marker). Tap another point on any part to place Point B (amber "
+                   "marker).");
+
+        bulletItem("Real-Time Floating 3D HUD Badge",
+                   "Automatically draws a high-visibility dashed measurement line and floating "
+                   "badge showing exact Euclidean distance (in mm / scene units).");
+
+        bulletItem("Coordinate Deltas",
+                   "Caliper displays delta X (dX), delta Y (dY), and delta Z (dZ) for precise "
+                   "clearance checking.");
+
+        bulletItem("Mesh Vertex Snap",
+                   "Check [x] Snap to Mesh Vertices to snap caliper endpoints to the nearest "
+                   "geometric mesh vertex for exact CAD dimension verification.");
+
+        bulletItem("Clear Measurement", "Tap [ Clear Measurement ] to reset points anytime.");
+    };
+
+    auto renderSection7 = [&]()
+    {
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                           "8. Project Serialization (.mcad) & STL / OBJ Import/Export");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        bulletItem("Native .mcad Workspace Serialization",
+                   "Save and load complete CAD multi-part assemblies, transforms, CSG negative "
+                   "properties, sketch profiles, and custom PBR surface materials. "
+                   "Saved directly in your application workspace for instant restoration across "
+                   "app sessions.");
+
+        bulletItem("Industry-Standard Mesh Export",
+                   "- [ Export STL ]: Exports watertight Binary STL files ready for 3D slicing "
+                   "software (Cura, PrusaSlicer, Bambu Studio) and CNC manufacturing.\n"
+                   "- [ Export OBJ ]: Exports Wavefront .obj files including per-vertex normals "
+                   "and material definitions for Blender, Maya, and game engines.");
+
+        bulletItem("STL & OBJ Mesh Importer",
+                   "Automatically scans device documents and downloads directories for .stl and "
+                   ".obj files. Supports both Binary and ASCII STL files, "
+                   "with automatic face normal generation and millimeter unit scaling. Imported "
+                   "meshes become first-class scene objects capable of boolean CSG cutting, "
+                   "transforms, and PBR painting.");
+    };
+
+    if (m_helpExpandAll)
+    {
+        renderSection0();
+        ImGui::Separator();
+        renderSection1();
+        ImGui::Separator();
+        renderSection2();
+        ImGui::Separator();
+        renderSection3();
+        ImGui::Separator();
+        renderSection4();
+        ImGui::Separator();
+        renderSection5();
+        ImGui::Separator();
+        renderSection6();
+        ImGui::Separator();
+        renderSection7();
+    }
+    else
+    {
+        switch (m_helpTab)
+        {
+        case 0:
+            renderSection0();
+            break;
+        case 1:
+            renderSection1();
+            break;
+        case 2:
+            renderSection2();
+            break;
+        case 3:
+            renderSection3();
+            break;
+        case 4:
+            renderSection4();
+            break;
+        case 5:
+            renderSection5();
+            break;
+        case 6:
+            renderSection6();
+            break;
+        case 7:
+            renderSection7();
+            break;
+        default:
+            renderSection0();
+            break;
+        }
+    }
+
+    ImGui::Separator();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.50f, 0.85f, 0.90f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.60f, 0.95f, 1.0f));
+    if (ImGui::Button("[ Close Help Guide ]", ImVec2(-1.0f, 38.0f)))
+    {
+        m_showHelpWindow = false;
+    }
+    ImGui::PopStyleColor(2);
+
+    ImGui::PopTextWrapPos();
+    ImGui::End();
+}
+
 void CADApp::renderImGui()
 {
     renderCompassGizmo();
     renderCaliperOverlay();
+
+    if (m_showHelpWindow)
+    {
+        renderHelpWindow();
+    }
 
     if (!m_showMenu)
     {
@@ -2654,14 +3075,24 @@ void CADApp::renderImGui()
             float rightEdge = ImGui::GetWindowContentRegionMax().x;
             float hideBtnW = 75.0f;
             float toggleBtnW = m_fullWidth ? 115.0f : 140.0f;
+            float helpBtnW = 75.0f;
             float spacing = ImGui::GetStyle().ItemSpacing.x;
-            float targetX = rightEdge - (hideBtnW + toggleBtnW + spacing);
+            float targetX = rightEdge - (hideBtnW + toggleBtnW + helpBtnW + spacing * 2.0f);
 
             if (ImGui::GetCursorPosX() < targetX)
             {
                 ImGui::SameLine(targetX);
             }
 
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.48f, 0.88f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.58f, 0.98f, 1.0f));
+            if (ImGui::SmallButton("? Help"))
+            {
+                m_showHelpWindow = !m_showHelpWindow;
+            }
+            ImGui::PopStyleColor(2);
+
+            ImGui::SameLine();
             if (ImGui::SmallButton(m_fullWidth ? "Compact" : "Full Width"))
             {
                 m_fullWidth = !m_fullWidth;
@@ -3512,7 +3943,17 @@ void CADApp::renderImGui()
                 }
             }
 
-            // 6. Graceful Exit
+            // 6. Help & User Guide
+            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.48f, 0.88f, 0.90f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.58f, 0.98f, 1.0f));
+            if (ImGui::Button("? Help & User Guide", ImVec2(-1.0f, 38.0f)))
+            {
+                m_showHelpWindow = true;
+            }
+            ImGui::PopStyleColor(2);
+
+            // 7. Graceful Exit
             ImGui::Separator();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.75f, 0.18f, 0.18f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.88f, 0.25f, 0.25f, 1.0f));

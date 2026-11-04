@@ -447,6 +447,9 @@ class CADApp
     // UI toolbar state
     bool m_showMenu{true};
     bool m_fullWidth{true};
+    bool m_showHelpWindow{false};
+    int m_helpTab{0};
+    bool m_helpExpandAll{false};
 
     // Scene geometry & Multi-object scene graph
     std::vector<SceneObject> m_objects;
@@ -522,6 +525,7 @@ class CADApp
                     const char* format = "%.2f", std::function<void()> onChanged = nullptr);
     void renderNumpadPopup();
     void renderCompassGizmo();
+    void renderHelpWindow();
 
     // On-screen numeric keypad state
     struct NumpadState
