@@ -21,55 +21,57 @@
 namespace app
 {
 
-static void applyMaterialPreset(SceneObject& obj, int preset)
+static SurfaceMaterial getPresetMaterial(int preset, const utils::math::Vec3f& currentColor)
 {
-    obj.materialPreset = preset;
+    SurfaceMaterial mat;
+    mat.preset = preset;
+    mat.color = currentColor;
     switch (preset)
     {
     case 0:  // Default (Multi-Face / Vertex Colors)
-        obj.metallic = 0.15f;
-        obj.roughness = 0.50f;
+        mat.metallic = 0.15f;
+        mat.roughness = 0.50f;
         break;
     case 1:  // Brushed Aluminum
-        obj.materialColor = {0.83f, 0.85f, 0.88f};
-        obj.metallic = 0.85f;
-        obj.roughness = 0.35f;
+        mat.color = {0.83f, 0.85f, 0.88f};
+        mat.metallic = 0.85f;
+        mat.roughness = 0.35f;
         break;
     case 2:  // Polished Brass / Gold
-        obj.materialColor = {0.95f, 0.78f, 0.35f};
-        obj.metallic = 0.90f;
-        obj.roughness = 0.20f;
+        mat.color = {0.95f, 0.78f, 0.35f};
+        mat.metallic = 0.90f;
+        mat.roughness = 0.20f;
         break;
     case 3:  // Anodized Blue
-        obj.materialColor = {0.15f, 0.45f, 0.90f};
-        obj.metallic = 0.70f;
-        obj.roughness = 0.30f;
+        mat.color = {0.15f, 0.45f, 0.90f};
+        mat.metallic = 0.70f;
+        mat.roughness = 0.30f;
         break;
     case 4:  // Stainless Steel
-        obj.materialColor = {0.75f, 0.76f, 0.78f};
-        obj.metallic = 0.92f;
-        obj.roughness = 0.25f;
+        mat.color = {0.75f, 0.76f, 0.78f};
+        mat.metallic = 0.92f;
+        mat.roughness = 0.25f;
         break;
     case 5:  // Matte Red ABS
-        obj.materialColor = {0.88f, 0.18f, 0.18f};
-        obj.metallic = 0.05f;
-        obj.roughness = 0.70f;
+        mat.color = {0.88f, 0.18f, 0.18f};
+        mat.metallic = 0.05f;
+        mat.roughness = 0.70f;
         break;
     case 6:  // Polished Copper
-        obj.materialColor = {0.92f, 0.55f, 0.40f};
-        obj.metallic = 0.95f;
-        obj.roughness = 0.18f;
+        mat.color = {0.92f, 0.55f, 0.40f};
+        mat.metallic = 0.95f;
+        mat.roughness = 0.18f;
         break;
     case 7:  // Titanium Gunmetal
-        obj.materialColor = {0.45f, 0.48f, 0.52f};
-        obj.metallic = 0.80f;
-        obj.roughness = 0.38f;
+        mat.color = {0.45f, 0.48f, 0.52f};
+        mat.metallic = 0.80f;
+        mat.roughness = 0.38f;
         break;
     case 8:  // Custom Color
-        break;
     default:
         break;
     }
+    return mat;
 }
 
 CADApp::CADApp(ANativeWindow* window)
@@ -670,9 +672,44 @@ void CADApp::rebuildObjectGeometry(size_t index)
             v.color[2] = 0.30f;
         }
     }
+    else
+    {
+        if (obj.materialPreset > 0)
+        {
+            SurfaceMaterial sm = getPresetMaterial(obj.materialPreset, obj.materialColor);
+            for (auto& v : data.first)
+            {
+                v.color[0] = sm.color.x;
+                v.color[1] = sm.color.y;
+                v.color[2] = sm.color.z;
+                v.pbr[0] = sm.metallic;
+                v.pbr[1] = sm.roughness;
+            }
+        }
+
+        for (size_t sid = 0; sid < obj.surfaceMaterials.size(); ++sid)
+        {
+            const auto& sm = obj.surfaceMaterials[sid];
+            if (sm.preset > 0)
+            {
+                for (auto& v : data.first)
+                {
+                    if (static_cast<int>(std::round(v.pbr[2])) == static_cast<int>(sid))
+                    {
+                        v.color[0] = sm.color.x;
+                        v.color[1] = sm.color.y;
+                        v.color[2] = sm.color.z;
+                        v.pbr[0] = sm.metallic;
+                        v.pbr[1] = sm.roughness;
+                    }
+                }
+            }
+        }
+    }
 
     obj.cpuVertices = data.first;
     obj.cpuIndices = data.second;
+    obj.ensureSurfaceMaterials();
     obj.updateAABB();
 
     auto wireLines = geometry::Primitives::createWireframeLines(data.first, data.second);
@@ -690,6 +727,68 @@ void CADApp::rebuildObjectGeometry(size_t index)
     }
     obj.selectedWireframeMesh =
         std::make_unique<rendering::MeshBuffer>(device, physDevice, selectedWireLines);
+}
+
+void CADApp::applySurfaceMaterial(SceneObject& obj, int targetSurfaceId, const SurfaceMaterial& mat)
+{
+    obj.ensureSurfaceMaterials();
+
+    if (targetSurfaceId < 0)
+    {
+        obj.materialPreset = mat.preset;
+        obj.materialColor = mat.color;
+        obj.metallic = mat.metallic;
+        obj.roughness = mat.roughness;
+
+        for (auto& sm : obj.surfaceMaterials)
+        {
+            sm = mat;
+        }
+
+        for (auto& v : obj.cpuVertices)
+        {
+            if (mat.preset != 0)
+            {
+                v.color[0] = mat.color.x;
+                v.color[1] = mat.color.y;
+                v.color[2] = mat.color.z;
+            }
+            v.pbr[0] = mat.metallic;
+            v.pbr[1] = mat.roughness;
+        }
+    }
+    else
+    {
+        if (targetSurfaceId < static_cast<int>(obj.surfaceMaterials.size()))
+        {
+            obj.surfaceMaterials[targetSurfaceId] = mat;
+        }
+
+        for (auto& v : obj.cpuVertices)
+        {
+            int sid = static_cast<int>(std::round(v.pbr[2]));
+            if (sid == targetSurfaceId)
+            {
+                if (mat.preset != 0)
+                {
+                    v.color[0] = mat.color.x;
+                    v.color[1] = mat.color.y;
+                    v.color[2] = mat.color.z;
+                }
+                v.pbr[0] = mat.metallic;
+                v.pbr[1] = mat.roughness;
+            }
+        }
+    }
+
+    if (m_vkContext && !obj.cpuVertices.empty())
+    {
+        auto device = m_vkContext->getDevice();
+        auto physDevice = m_vkContext->getPhysicalDevice();
+        vkDeviceWaitIdle(device);
+        obj.solidMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, obj.cpuVertices,
+                                                                obj.cpuIndices);
+    }
 }
 
 void CADApp::rebuildGeometry()
@@ -987,6 +1086,7 @@ void CADApp::applyCsgSubtract()
             auto meshData = geometry::Primitives::fromManifold(cutResult);
             posObj.cpuVertices = std::move(meshData.first);
             posObj.cpuIndices = std::move(meshData.second);
+            posObj.ensureSurfaceMaterials();
             posObj.updateAABB();
 
             auto wireLines =
@@ -1150,6 +1250,7 @@ void CADApp::applyUnionOrGroup()
         auto meshData = geometry::Primitives::fromManifold(combined);
         newObj.cpuVertices = std::move(meshData.first);
         newObj.cpuIndices = std::move(meshData.second);
+        newObj.ensureSurfaceMaterials();
         newObj.updateAABB();
 
         auto wireLines =
@@ -1570,6 +1671,8 @@ bool CADApp::importMeshFile(const std::string& filepath)
         v.position[2] = (v.position[2] - centerZ) * scaleFactor;
     }
 
+    geometry::Primitives::assignSurfaceClusters(vertices, indices);
+
     pushUndoState();
 
     for (auto& obj : m_objects)
@@ -1596,6 +1699,7 @@ bool CADApp::importMeshFile(const std::string& filepath)
 
     newObj.cpuVertices = std::move(vertices);
     newObj.cpuIndices = std::move(indices);
+    newObj.ensureSurfaceMaterials();
     newObj.updateAABB();
 
     // Watertight manifold building for CSG & Caliper compatibility
@@ -1702,6 +1806,8 @@ HistoryState CADApp::captureCurrentState() const
         snap.aabbMax = obj.aabbMax;
         snap.cpuVertices = obj.cpuVertices;
         snap.cpuIndices = obj.cpuIndices;
+        snap.surfaceMaterials = obj.surfaceMaterials;
+        snap.selectedSurfaceId = obj.selectedSurfaceId;
         state.objects.push_back(std::move(snap));
     }
     return state;
@@ -1739,6 +1845,8 @@ void CADApp::restoreState(const HistoryState& state)
         obj.aabbMax = snap.aabbMax;
         obj.cpuVertices = snap.cpuVertices;
         obj.cpuIndices = snap.cpuIndices;
+        obj.surfaceMaterials = snap.surfaceMaterials;
+        obj.selectedSurfaceId = snap.selectedSurfaceId;
 
         if (!obj.cpuVertices.empty() && obj.cpuIndices.size() >= 3)
         {
@@ -3108,12 +3216,97 @@ void CADApp::renderImGui()
                 if (ImGui::CollapsingHeader("Material & Surface Finish",
                                             ImGuiTreeNodeFlags_DefaultOpen))
                 {
+                    obj.ensureSurfaceMaterials();
+                    int numSurfaces = obj.getSurfaceCount();
+
+                    // Surface Target Selector
+                    std::vector<std::string> targetNames;
+                    targetNames.reserve(numSurfaces + 1);
+                    targetNames.push_back("Whole Object");
+                    for (int si = 0; si < numSurfaces; ++si)
+                    {
+                        char buf[64];
+                        if (obj.primitiveType == PrimitiveType::Box)
+                        {
+                            const char* boxFaceNames[] = {"Top (+Y)",  "Bottom (-Y)", "Front (+Z)",
+                                                          "Back (-Z)", "Right (+X)",  "Left (-X)"};
+                            if (si < 6)
+                                snprintf(buf, sizeof(buf), "Surface #%d (%s)", si,
+                                         boxFaceNames[si]);
+                            else
+                                snprintf(buf, sizeof(buf), "Surface #%d", si);
+                        }
+                        else if (obj.primitiveType == PrimitiveType::Cylinder)
+                        {
+                            const char* cylFaceNames[] = {"Top Cap", "Bottom Cap", "Side Wall"};
+                            if (si < 3)
+                                snprintf(buf, sizeof(buf), "Surface #%d (%s)", si,
+                                         cylFaceNames[si]);
+                            else
+                                snprintf(buf, sizeof(buf), "Surface #%d", si);
+                        }
+                        else if (obj.primitiveType == PrimitiveType::Extrude)
+                        {
+                            const char* extFaceNames[] = {"Top Cap", "Bottom Cap", "Side Walls",
+                                                          "Bevel Rim"};
+                            if (si < 4)
+                                snprintf(buf, sizeof(buf), "Surface #%d (%s)", si,
+                                         extFaceNames[si]);
+                            else
+                                snprintf(buf, sizeof(buf), "Surface #%d", si);
+                        }
+                        else
+                        {
+                            snprintf(buf, sizeof(buf), "Surface #%d", si);
+                        }
+                        targetNames.push_back(buf);
+                    }
+
+                    int currentTargetIdx =
+                        (obj.selectedSurfaceId < 0 || obj.selectedSurfaceId >= numSurfaces)
+                            ? 0
+                            : (obj.selectedSurfaceId + 1);
+
+                    std::vector<const char*> targetItems;
+                    targetItems.reserve(targetNames.size());
+                    for (const auto& s : targetNames)
+                        targetItems.push_back(s.c_str());
+
+                    if (ImGui::Combo("Target", &currentTargetIdx, targetItems.data(),
+                                     static_cast<int>(targetItems.size())))
+                    {
+                        obj.selectedSurfaceId = currentTargetIdx - 1;
+                    }
+
+                    ImGui::Checkbox("Tap 3D Face to Pick Surface", &m_pickSurfaceMode);
+
                     static const char* kMaterialPresets[] = {
                         "Default (Multi-Face)", "Brushed Aluminum",  "Polished Brass / Gold",
                         "Anodized Blue",        "Stainless Steel",   "Matte Red ABS",
                         "Polished Copper",      "Titanium Gunmetal", "Custom Color"};
 
-                    int currentPreset = obj.materialPreset;
+                    int targetSurfaceId = obj.selectedSurfaceId;
+                    int currentPreset = 0;
+                    float* pMetallic = nullptr;
+                    float* pRoughness = nullptr;
+                    utils::math::Vec3f currentColor;
+
+                    if (targetSurfaceId >= 0 &&
+                        targetSurfaceId < static_cast<int>(obj.surfaceMaterials.size()))
+                    {
+                        currentPreset = obj.surfaceMaterials[targetSurfaceId].preset;
+                        currentColor = obj.surfaceMaterials[targetSurfaceId].color;
+                        pMetallic = &obj.surfaceMaterials[targetSurfaceId].metallic;
+                        pRoughness = &obj.surfaceMaterials[targetSurfaceId].roughness;
+                    }
+                    else
+                    {
+                        currentPreset = obj.materialPreset;
+                        currentColor = obj.materialColor;
+                        pMetallic = &obj.metallic;
+                        pRoughness = &obj.roughness;
+                    }
+
                     if (currentPreset < 0 || currentPreset > 8)
                         currentPreset = 8;
 
@@ -3121,35 +3314,58 @@ void CADApp::renderImGui()
                                      IM_ARRAYSIZE(kMaterialPresets)))
                     {
                         pushUndoState();
-                        applyMaterialPreset(obj, currentPreset);
+                        SurfaceMaterial sm = getPresetMaterial(currentPreset, currentColor);
+                        applySurfaceMaterial(obj, targetSurfaceId, sm);
                     }
 
-                    float col[3] = {obj.materialColor.x, obj.materialColor.y, obj.materialColor.z};
-                    if (ImGui::ColorEdit3("Part Color", col))
+                    float col[3] = {currentColor.x, currentColor.y, currentColor.z};
+                    if (ImGui::ColorEdit3(targetSurfaceId < 0 ? "Part Color" : "Surface Color",
+                                          col))
                     {
                         pushUndoState();
-                        obj.materialColor = {col[0], col[1], col[2]};
-                        obj.materialPreset = 8;
+                        SurfaceMaterial sm;
+                        sm.color = {col[0], col[1], col[2]};
+                        sm.metallic = *pMetallic;
+                        sm.roughness = *pRoughness;
+                        sm.preset = 8;
+                        applySurfaceMaterial(obj, targetSurfaceId, sm);
                     }
 
-                    if (drawNumericControl("Metallic", &obj.metallic, 0.05f, 0.0f, 1.0f, "%.2f",
-                                           [this, &obj]()
-                                           {
-                                               pushUndoState();
-                                               obj.materialPreset = 8;
-                                           }))
+                    auto onMatChanged = [this, targetSurfaceId]()
                     {
-                        obj.materialPreset = 8;
+                        if (m_selectedIndex >= 0 &&
+                            m_selectedIndex < static_cast<int>(m_objects.size()))
+                        {
+                            auto& o = m_objects[m_selectedIndex];
+                            if (targetSurfaceId < 0)
+                            {
+                                o.materialPreset = 8;
+                                SurfaceMaterial sm;
+                                sm.color = o.materialColor;
+                                sm.metallic = o.metallic;
+                                sm.roughness = o.roughness;
+                                sm.preset = 8;
+                                applySurfaceMaterial(o, -1, sm);
+                            }
+                            else if (targetSurfaceId < static_cast<int>(o.surfaceMaterials.size()))
+                            {
+                                o.surfaceMaterials[targetSurfaceId].preset = 8;
+                                applySurfaceMaterial(o, targetSurfaceId,
+                                                     o.surfaceMaterials[targetSurfaceId]);
+                            }
+                        }
+                    };
+
+                    if (drawNumericControl("Metallic", pMetallic, 0.05f, 0.0f, 1.0f, "%.2f",
+                                           onMatChanged))
+                    {
+                        onMatChanged();
                     }
 
-                    if (drawNumericControl("Roughness", &obj.roughness, 0.05f, 0.04f, 1.0f, "%.2f",
-                                           [this, &obj]()
-                                           {
-                                               pushUndoState();
-                                               obj.materialPreset = 8;
-                                           }))
+                    if (drawNumericControl("Roughness", pRoughness, 0.05f, 0.04f, 1.0f, "%.2f",
+                                           onMatChanged))
                     {
-                        obj.materialPreset = 8;
+                        onMatChanged();
                     }
                 }
             }
@@ -3721,6 +3937,79 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
                                 break;
                             }
                         }
+                    }
+                }
+                else if (m_pickSurfaceMode)
+                {
+                    int hitObjIndex = -1;
+                    int hitSurfaceId = -1;
+                    float closestDist = 1e30f;
+
+                    for (size_t oi = 0; oi < m_objects.size(); ++oi)
+                    {
+                        const auto& obj = m_objects[oi];
+                        if (obj.cpuVertices.empty() || obj.cpuIndices.size() < 3)
+                            continue;
+
+                        auto model = obj.getModelMatrix();
+                        auto invModel = model.inverted();
+
+                        utils::math::Ray localRay;
+                        localRay.origin = invModel * ray.origin;
+                        localRay.dir = invModel.transformDirection(ray.dir).normalized();
+
+                        float tAABB = 0.0f;
+                        if (!utils::math::Ray::intersectAABB(localRay, obj.aabbMin, obj.aabbMax,
+                                                             tAABB))
+                            continue;
+
+                        for (size_t ti = 0; ti + 2 < obj.cpuIndices.size(); ti += 3)
+                        {
+                            uint32_t i0 = obj.cpuIndices[ti];
+                            uint32_t i1 = obj.cpuIndices[ti + 1];
+                            uint32_t i2 = obj.cpuIndices[ti + 2];
+                            if (i0 >= obj.cpuVertices.size() || i1 >= obj.cpuVertices.size() ||
+                                i2 >= obj.cpuVertices.size())
+                                continue;
+
+                            utils::math::Vec3f lv0{obj.cpuVertices[i0].position[0],
+                                                   obj.cpuVertices[i0].position[1],
+                                                   obj.cpuVertices[i0].position[2]};
+                            utils::math::Vec3f lv1{obj.cpuVertices[i1].position[0],
+                                                   obj.cpuVertices[i1].position[1],
+                                                   obj.cpuVertices[i1].position[2]};
+                            utils::math::Vec3f lv2{obj.cpuVertices[i2].position[0],
+                                                   obj.cpuVertices[i2].position[1],
+                                                   obj.cpuVertices[i2].position[2]};
+
+                            float tTri = 0.0f;
+                            if (utils::math::Ray::intersectTriangle(localRay, lv0, lv1, lv2, tTri))
+                            {
+                                utils::math::Vec3f localHit = localRay.origin + localRay.dir * tTri;
+                                utils::math::Vec3f worldHit = model * localHit;
+                                float dist = (worldHit - ray.origin).length();
+                                if (dist < closestDist)
+                                {
+                                    closestDist = dist;
+                                    hitObjIndex = static_cast<int>(oi);
+                                    hitSurfaceId =
+                                        static_cast<int>(std::round(obj.cpuVertices[i0].pbr[2]));
+                                }
+                            }
+                        }
+                    }
+
+                    if (hitObjIndex >= 0)
+                    {
+                        m_selectedIndex = hitObjIndex;
+                        for (size_t i = 0; i < m_objects.size(); ++i)
+                        {
+                            m_objects[i].isSelected = (static_cast<int>(i) == hitObjIndex);
+                        }
+                        m_objects[hitObjIndex].selectedSurfaceId = hitSurfaceId;
+                        m_objects[hitObjIndex].ensureSurfaceMaterials();
+                        LOGI("Picked Surface #%d on object %s", hitSurfaceId,
+                             m_objects[hitObjIndex].name.c_str());
                     }
                 }
                 else

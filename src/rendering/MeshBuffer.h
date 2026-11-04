@@ -11,12 +11,13 @@ namespace rendering
 
 struct Vertex
 {
-    float position[3];
-    float normal[3];
-    float color[3];
+    float position[3]{0.0f, 0.0f, 0.0f};
+    float normal[3]{0.0f, 1.0f, 0.0f};
+    float color[3]{0.8f, 0.8f, 0.8f};
+    float pbr[3]{0.35f, 0.35f, 0.0f};  // x: metallic, y: roughness, z: surfaceId
 
     static VkVertexInputBindingDescription getBindingDescription();
-    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions();
+    static std::array<VkVertexInputAttributeDescription, 4> getAttributeDescriptions();
 };
 
 class MeshBuffer

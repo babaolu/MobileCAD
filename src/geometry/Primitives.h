@@ -33,13 +33,25 @@ class Primitives
         const float hz = depth * 0.5f;
 
         auto addQuad = [&](const float p0[3], const float p1[3], const float p2[3],
-                           const float p3[3], const float n[3], const float c[3])
+                           const float p3[3], const float n[3], const float c[3], float sid)
         {
             uint32_t baseIdx = static_cast<uint32_t>(vertices.size());
-            vertices.push_back({{p0[0], p0[1], p0[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
-            vertices.push_back({{p1[0], p1[1], p1[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
-            vertices.push_back({{p2[0], p2[1], p2[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
-            vertices.push_back({{p3[0], p3[1], p3[2]}, {n[0], n[1], n[2]}, {c[0], c[1], c[2]}});
+            vertices.push_back({{p0[0], p0[1], p0[2]},
+                                {n[0], n[1], n[2]},
+                                {c[0], c[1], c[2]},
+                                {0.35f, 0.35f, sid}});
+            vertices.push_back({{p1[0], p1[1], p1[2]},
+                                {n[0], n[1], n[2]},
+                                {c[0], c[1], c[2]},
+                                {0.35f, 0.35f, sid}});
+            vertices.push_back({{p2[0], p2[1], p2[2]},
+                                {n[0], n[1], n[2]},
+                                {c[0], c[1], c[2]},
+                                {0.35f, 0.35f, sid}});
+            vertices.push_back({{p3[0], p3[1], p3[2]},
+                                {n[0], n[1], n[2]},
+                                {c[0], c[1], c[2]},
+                                {0.35f, 0.35f, sid}});
 
             indices.push_back(baseIdx + 0);
             indices.push_back(baseIdx + 1);
@@ -49,59 +61,59 @@ class Primitives
             indices.push_back(baseIdx + 3);
         };
 
-        // +Z Face (Front) - Anodized CAD Blue
-        const float pZ_0[3] = {-hx, y0, hz};
-        const float pZ_1[3] = {hx, y0, hz};
-        const float pZ_2[3] = {hx, y1, hz};
-        const float pZ_3[3] = {-hx, y1, hz};
-        const float nZ[3] = {0.0f, 0.0f, 1.0f};
-        const float cZ[3] = {0.35f, 0.65f, 0.95f};
-        addQuad(pZ_0, pZ_1, pZ_2, pZ_3, nZ, cZ);
-
-        // -Z Face (Back) - Bronze / Copper
-        const float nZb_0[3] = {hx, y0, -hz};
-        const float nZb_1[3] = {-hx, y0, -hz};
-        const float nZb_2[3] = {-hx, y1, -hz};
-        const float nZb_3[3] = {hx, y1, -hz};
-        const float nZb[3] = {0.0f, 0.0f, -1.0f};
-        const float cZb[3] = {0.85f, 0.60f, 0.30f};
-        addQuad(nZb_0, nZb_1, nZb_2, nZb_3, nZb, cZb);
-
-        // +Y Face (Top) - Polished Brass / Gold
+        // Surface 0: +Y Face (Top) - Polished Brass / Gold
         const float pY_0[3] = {-hx, y1, hz};
         const float pY_1[3] = {hx, y1, hz};
         const float pY_2[3] = {hx, y1, -hz};
         const float pY_3[3] = {-hx, y1, -hz};
         const float nY[3] = {0.0f, 1.0f, 0.0f};
         const float cY[3] = {0.92f, 0.76f, 0.35f};
-        addQuad(pY_0, pY_1, pY_2, pY_3, nY, cY);
+        addQuad(pY_0, pY_1, pY_2, pY_3, nY, cY, 0.0f);
 
-        // -Y Face (Bottom) - Cast Iron
+        // Surface 1: -Y Face (Bottom) - Cast Iron
         const float nY_0[3] = {-hx, y0, -hz};
         const float nY_1[3] = {hx, y0, -hz};
         const float nY_2[3] = {hx, y0, hz};
         const float nY_3[3] = {-hx, y0, hz};
         const float nYb[3] = {0.0f, -1.0f, 0.0f};
         const float cYb[3] = {0.50f, 0.52f, 0.58f};
-        addQuad(nY_0, nY_1, nY_2, nY_3, nYb, cYb);
+        addQuad(nY_0, nY_1, nY_2, nY_3, nYb, cYb, 1.0f);
 
-        // +X Face (Right) - CAD Aluminum / Silver
+        // Surface 2: +Z Face (Front) - Anodized CAD Blue
+        const float pZ_0[3] = {-hx, y0, hz};
+        const float pZ_1[3] = {hx, y0, hz};
+        const float pZ_2[3] = {hx, y1, hz};
+        const float pZ_3[3] = {-hx, y1, hz};
+        const float nZ[3] = {0.0f, 0.0f, 1.0f};
+        const float cZ[3] = {0.35f, 0.65f, 0.95f};
+        addQuad(pZ_0, pZ_1, pZ_2, pZ_3, nZ, cZ, 2.0f);
+
+        // Surface 3: -Z Face (Back) - Bronze / Copper
+        const float nZb_0[3] = {hx, y0, -hz};
+        const float nZb_1[3] = {-hx, y0, -hz};
+        const float nZb_2[3] = {-hx, y1, -hz};
+        const float nZb_3[3] = {hx, y1, -hz};
+        const float nZb[3] = {0.0f, 0.0f, -1.0f};
+        const float cZb[3] = {0.85f, 0.60f, 0.30f};
+        addQuad(nZb_0, nZb_1, nZb_2, nZb_3, nZb, cZb, 3.0f);
+
+        // Surface 4: +X Face (Right) - CAD Aluminum / Silver
         const float pX_0[3] = {hx, y0, hz};
         const float pX_1[3] = {hx, y0, -hz};
         const float pX_2[3] = {hx, y1, -hz};
         const float pX_3[3] = {hx, y1, hz};
         const float nX[3] = {1.0f, 0.0f, 0.0f};
         const float cX[3] = {0.82f, 0.85f, 0.90f};
-        addQuad(pX_0, pX_1, pX_2, pX_3, nX, cX);
+        addQuad(pX_0, pX_1, pX_2, pX_3, nX, cX, 4.0f);
 
-        // -X Face (Left) - Slate Steel
+        // Surface 5: -X Face (Left) - Slate Steel
         const float nX_0[3] = {-hx, y0, -hz};
         const float nX_1[3] = {-hx, y0, hz};
         const float nX_2[3] = {-hx, y1, hz};
         const float nX_3[3] = {-hx, y1, -hz};
         const float nXb[3] = {-1.0f, 0.0f, 0.0f};
         const float cXb[3] = {0.75f, 0.78f, 0.85f};
-        addQuad(nX_0, nX_1, nX_2, nX_3, nXb, cXb);
+        addQuad(nX_0, nX_1, nX_2, nX_3, nXb, cXb, 5.0f);
 
         return {std::move(vertices), std::move(indices)};
     }
@@ -127,14 +139,16 @@ class Primitives
             float nx = cosT;
             float nz = sinT;
 
-            // Bottom vertex at Y = 0
+            // Bottom vertex at Y = 0 (Side Wall: Surface 2)
             vertices.push_back({{radius * cosT, 0.0f, radius * sinT},
                                 {nx, 0.0f, nz},
-                                {sideColor[0], sideColor[1], sideColor[2]}});
-            // Top vertex at Y = height
+                                {sideColor[0], sideColor[1], sideColor[2]},
+                                {0.35f, 0.35f, 2.0f}});
+            // Top vertex at Y = height (Side Wall: Surface 2)
             vertices.push_back({{radius * cosT, height, radius * sinT},
                                 {nx, 0.0f, nz},
-                                {sideColor[0], sideColor[1], sideColor[2]}});
+                                {sideColor[0], sideColor[1], sideColor[2]},
+                                {0.35f, 0.35f, 2.0f}});
         }
 
         for (uint32_t i = 0; i < segments; ++i)
@@ -153,17 +167,20 @@ class Primitives
             indices.push_back(t0);
         }
 
-        // B. Top cap (flat +Y normal)
+        // B. Top cap (Surface 0, flat +Y normal)
         uint32_t topCenterIdx = static_cast<uint32_t>(vertices.size());
-        vertices.push_back(
-            {{0.0f, height, 0.0f}, {0.0f, 1.0f, 0.0f}, {topColor[0], topColor[1], topColor[2]}});
+        vertices.push_back({{0.0f, height, 0.0f},
+                            {0.0f, 1.0f, 0.0f},
+                            {topColor[0], topColor[1], topColor[2]},
+                            {0.35f, 0.35f, 0.0f}});
         uint32_t topRimBase = static_cast<uint32_t>(vertices.size());
         for (uint32_t i = 0; i <= segments; ++i)
         {
             float theta = twoPi * static_cast<float>(i) / static_cast<float>(segments);
             vertices.push_back({{radius * std::cos(theta), height, radius * std::sin(theta)},
                                 {0.0f, 1.0f, 0.0f},
-                                {topColor[0], topColor[1], topColor[2]}});
+                                {topColor[0], topColor[1], topColor[2]},
+                                {0.35f, 0.35f, 0.0f}});
         }
         for (uint32_t i = 0; i < segments; ++i)
         {
@@ -172,17 +189,20 @@ class Primitives
             indices.push_back(topRimBase + i);
         }
 
-        // C. Bottom cap (flat -Y normal)
+        // C. Bottom cap (Surface 1, flat -Y normal)
         uint32_t botCenterIdx = static_cast<uint32_t>(vertices.size());
-        vertices.push_back(
-            {{0.0f, 0.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, {botColor[0], botColor[1], botColor[2]}});
+        vertices.push_back({{0.0f, 0.0f, 0.0f},
+                            {0.0f, -1.0f, 0.0f},
+                            {botColor[0], botColor[1], botColor[2]},
+                            {0.35f, 0.35f, 1.0f}});
         uint32_t botRimBase = static_cast<uint32_t>(vertices.size());
         for (uint32_t i = 0; i <= segments; ++i)
         {
             float theta = twoPi * static_cast<float>(i) / static_cast<float>(segments);
             vertices.push_back({{radius * std::cos(theta), 0.0f, radius * std::sin(theta)},
                                 {0.0f, -1.0f, 0.0f},
-                                {botColor[0], botColor[1], botColor[2]}});
+                                {botColor[0], botColor[1], botColor[2]},
+                                {0.35f, 0.35f, 1.0f}});
         }
         for (uint32_t i = 0; i < segments; ++i)
         {
@@ -250,76 +270,338 @@ class Primitives
         return {std::move(vertices), std::move(indices)};
     }
 
-    // Convert Manifold solid to MeshData with outward normals
+    // Convert Manifold solid to MeshData with outward normals, crease splitting, and surface
+    // clustering
     static MeshData fromManifold(const manifold::Manifold& m, const float defaultColor[3] = nullptr)
     {
         std::vector<rendering::Vertex> vertices;
         std::vector<uint32_t> indices;
 
+        if (m.IsEmpty())
+            return {std::move(vertices), std::move(indices)};
+
         const float defCol[3] = {0.35f, 0.65f, 0.95f};  // Anodized CAD Blue
         const float* col = defaultColor ? defaultColor : defCol;
 
-        manifold::Manifold withNormals = m.CalculateNormals(3, 52.5);
-        manifold::MeshGL gl = withNormals.GetMeshGL();
-
-        indices = std::move(gl.triVerts);
+        manifold::MeshGL gl = m.GetMeshGL();
+        size_t numTriVerts = gl.triVerts.size();
         size_t numVerts = gl.NumVert();
-        vertices.reserve(numVerts);
+        if (numTriVerts < 3 || numVerts == 0)
+            return {std::move(vertices), std::move(indices)};
 
+        size_t numTris = numTriVerts / 3;
         int numProp = gl.numProp;
-        for (size_t i = 0; i < numVerts; ++i)
+
+        // 1. Extract triangle geometry and compute exact geometric face normals
+        struct TriInfo
         {
-            float px = gl.vertProperties[i * numProp + 0];
-            float py = gl.vertProperties[i * numProp + 1];
-            float pz = gl.vertProperties[i * numProp + 2];
-            float nx = 0.0f, ny = 1.0f, nz = 0.0f;
-            if (numProp >= 6)
+            uint32_t v[3];
+            utils::math::Vec3f normal;
+            utils::math::Vec3f center;
+            int surfaceId{0};
+        };
+
+        std::vector<TriInfo> tris(numTris);
+        for (size_t t = 0; t < numTris; ++t)
+        {
+            uint32_t i0 = gl.triVerts[t * 3 + 0];
+            uint32_t i1 = gl.triVerts[t * 3 + 1];
+            uint32_t i2 = gl.triVerts[t * 3 + 2];
+            tris[t].v[0] = i0;
+            tris[t].v[1] = i1;
+            tris[t].v[2] = i2;
+
+            utils::math::Vec3f p0{gl.vertProperties[i0 * numProp + 0],
+                                  gl.vertProperties[i0 * numProp + 1],
+                                  gl.vertProperties[i0 * numProp + 2]};
+            utils::math::Vec3f p1{gl.vertProperties[i1 * numProp + 0],
+                                  gl.vertProperties[i1 * numProp + 1],
+                                  gl.vertProperties[i1 * numProp + 2]};
+            utils::math::Vec3f p2{gl.vertProperties[i2 * numProp + 0],
+                                  gl.vertProperties[i2 * numProp + 1],
+                                  gl.vertProperties[i2 * numProp + 2]};
+
+            tris[t].center = (p0 + p1 + p2) * (1.0f / 3.0f);
+            utils::math::Vec3f fn = (p1 - p0).cross(p2 - p0);
+            float len = fn.length();
+            if (len > 1e-7f)
             {
-                nx = gl.vertProperties[i * numProp + 3];
-                ny = gl.vertProperties[i * numProp + 4];
-                nz = gl.vertProperties[i * numProp + 5];
+                tris[t].normal = fn * (1.0f / len);
             }
-            vertices.push_back({{px, py, pz}, {nx, ny, nz}, {col[0], col[1], col[2]}});
+            else
+            {
+                tris[t].normal = {0.0f, 1.0f, 0.0f};
+            }
         }
 
-        if (numProp < 6 && indices.size() >= 3)
+        // 2. Build edge adjacency map to cluster triangles into logical surfaces
+        // Two triangles are adjacent if they share an edge (v0, v1)
+        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> edgeToTris;
+        for (size_t t = 0; t < numTris; ++t)
         {
-            for (size_t t = 0; t + 2 < indices.size(); t += 3)
+            for (int e = 0; e < 3; ++e)
             {
-                uint32_t i0 = indices[t];
-                uint32_t i1 = indices[t + 1];
-                uint32_t i2 = indices[t + 2];
+                uint32_t a = tris[t].v[e];
+                uint32_t b = tris[t].v[(e + 1) % 3];
+                if (a > b)
+                    std::swap(a, b);
+                edgeToTris[{a, b}].push_back(static_cast<uint32_t>(t));
+            }
+        }
 
-                float e1[3] = {vertices[i1].position[0] - vertices[i0].position[0],
-                               vertices[i1].position[1] - vertices[i0].position[1],
-                               vertices[i1].position[2] - vertices[i0].position[2]};
-                float e2[3] = {vertices[i2].position[0] - vertices[i0].position[0],
-                               vertices[i2].position[1] - vertices[i0].position[1],
-                               vertices[i2].position[2] - vertices[i0].position[2]};
-
-                float fn[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
-                               e1[0] * e2[1] - e1[1] * e2[0]};
-                float len = std::hypot(std::hypot(fn[0], fn[1]), fn[2]);
-                if (len > 1e-6f)
+        // Adjacency graph between triangles
+        std::vector<std::vector<uint32_t>> triNeighbors(numTris);
+        for (const auto& pair : edgeToTris)
+        {
+            const auto& list = pair.second;
+            for (size_t i = 0; i < list.size(); ++i)
+            {
+                for (size_t j = i + 1; j < list.size(); ++j)
                 {
-                    fn[0] /= len;
-                    fn[1] /= len;
-                    fn[2] /= len;
+                    triNeighbors[list[i]].push_back(list[j]);
+                    triNeighbors[list[j]].push_back(list[i]);
+                }
+            }
+        }
+
+        // Connected component flood-fill across adjacent triangles whose face normals are within 35
+        // deg (dot > 0.82)
+        std::vector<bool> visited(numTris, false);
+        int currentSurfaceId = 0;
+
+        for (size_t t = 0; t < numTris; ++t)
+        {
+            if (visited[t])
+                continue;
+
+            std::vector<uint32_t> queue;
+            queue.push_back(static_cast<uint32_t>(t));
+            visited[t] = true;
+            tris[t].surfaceId = currentSurfaceId;
+
+            size_t head = 0;
+            while (head < queue.size())
+            {
+                uint32_t curr = queue[head++];
+                const auto& curNorm = tris[curr].normal;
+
+                for (uint32_t nbr : triNeighbors[curr])
+                {
+                    if (!visited[nbr])
+                    {
+                        if (curNorm.dot(tris[nbr].normal) > 0.82f)
+                        {
+                            visited[nbr] = true;
+                            tris[nbr].surfaceId = currentSurfaceId;
+                            queue.push_back(nbr);
+                        }
+                    }
+                }
+            }
+            currentSurfaceId++;
+        }
+
+        // 3. Compute smooth vertex normals with crease splitting (crease angle <= 45 deg, dot >
+        // 0.707)
+        std::vector<std::vector<uint32_t>> vertToTris(numVerts);
+        for (size_t t = 0; t < numTris; ++t)
+        {
+            vertToTris[tris[t].v[0]].push_back(static_cast<uint32_t>(t));
+            vertToTris[tris[t].v[1]].push_back(static_cast<uint32_t>(t));
+            vertToTris[tris[t].v[2]].push_back(static_cast<uint32_t>(t));
+        }
+
+        // 4. Assemble vertices and indices, welding identical (pos, norm, color, surfaceId)
+        std::map<std::tuple<int64_t, int64_t, int64_t, int, int, int, int>, uint32_t> weldMap;
+        vertices.reserve(numTris * 3);
+        indices.reserve(numTris * 3);
+
+        for (size_t t = 0; t < numTris; ++t)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                uint32_t vIdx = tris[t].v[k];
+                float px = gl.vertProperties[vIdx * numProp + 0];
+                float py = gl.vertProperties[vIdx * numProp + 1];
+                float pz = gl.vertProperties[vIdx * numProp + 2];
+
+                // Average face normals of incident triangles with normal dot > 0.707
+                utils::math::Vec3f avgNorm{0.0f, 0.0f, 0.0f};
+                for (uint32_t otherTri : vertToTris[vIdx])
+                {
+                    if (tris[t].normal.dot(tris[otherTri].normal) > 0.707f)
+                    {
+                        avgNorm = avgNorm + tris[otherTri].normal;
+                    }
                 }
 
-                vertices[i0].normal[0] = fn[0];
-                vertices[i0].normal[1] = fn[1];
-                vertices[i0].normal[2] = fn[2];
-                vertices[i1].normal[0] = fn[0];
-                vertices[i1].normal[1] = fn[1];
-                vertices[i1].normal[2] = fn[2];
-                vertices[i2].normal[0] = fn[0];
-                vertices[i2].normal[1] = fn[1];
-                vertices[i2].normal[2] = fn[2];
+                float len = avgNorm.length();
+                utils::math::Vec3f cornerNorm =
+                    (len > 1e-4f) ? (avgNorm * (1.0f / len)) : tris[t].normal;
+                if (cornerNorm.lengthSquared() < 0.5f)
+                {
+                    cornerNorm = {0.0f, 1.0f, 0.0f};
+                }
+
+                int64_t qx = static_cast<int64_t>(std::round(px * 10000.0f));
+                int64_t qy = static_cast<int64_t>(std::round(py * 10000.0f));
+                int64_t qz = static_cast<int64_t>(std::round(pz * 10000.0f));
+                int qnx = static_cast<int>(std::round(cornerNorm.x * 1000.0f));
+                int qny = static_cast<int>(std::round(cornerNorm.y * 1000.0f));
+                int qnz = static_cast<int>(std::round(cornerNorm.z * 1000.0f));
+                int sid = tris[t].surfaceId;
+
+                auto key = std::make_tuple(qx, qy, qz, qnx, qny, qnz, sid);
+                auto it = weldMap.find(key);
+                if (it == weldMap.end())
+                {
+                    uint32_t newIdx = static_cast<uint32_t>(vertices.size());
+                    weldMap[key] = newIdx;
+                    indices.push_back(newIdx);
+
+                    rendering::Vertex v{};
+                    v.position[0] = px;
+                    v.position[1] = py;
+                    v.position[2] = pz;
+                    v.normal[0] = cornerNorm.x;
+                    v.normal[1] = cornerNorm.y;
+                    v.normal[2] = cornerNorm.z;
+                    v.color[0] = col[0];
+                    v.color[1] = col[1];
+                    v.color[2] = col[2];
+                    v.pbr[0] = 0.35f;
+                    v.pbr[1] = 0.35f;
+                    v.pbr[2] = static_cast<float>(sid);
+                    vertices.push_back(v);
+                }
+                else
+                {
+                    indices.push_back(it->second);
+                }
             }
         }
 
         return {std::move(vertices), std::move(indices)};
+    }
+
+    // Automatically cluster triangles into logical surfaces based on face normal similarity
+    static void assignSurfaceClusters(std::vector<rendering::Vertex>& vertices,
+                                      const std::vector<uint32_t>& indices)
+    {
+        if (indices.size() < 3 || vertices.empty())
+            return;
+
+        size_t numTris = indices.size() / 3;
+        struct Tri
+        {
+            uint32_t v[3];
+            utils::math::Vec3f normal;
+            int surfaceId{0};
+        };
+
+        std::vector<Tri> tris(numTris);
+        for (size_t t = 0; t < numTris; ++t)
+        {
+            uint32_t i0 = indices[t * 3 + 0];
+            uint32_t i1 = indices[t * 3 + 1];
+            uint32_t i2 = indices[t * 3 + 2];
+            tris[t].v[0] = i0;
+            tris[t].v[1] = i1;
+            tris[t].v[2] = i2;
+
+            if (i0 < vertices.size() && i1 < vertices.size() && i2 < vertices.size())
+            {
+                utils::math::Vec3f p0{vertices[i0].position[0], vertices[i0].position[1],
+                                      vertices[i0].position[2]};
+                utils::math::Vec3f p1{vertices[i1].position[0], vertices[i1].position[1],
+                                      vertices[i1].position[2]};
+                utils::math::Vec3f p2{vertices[i2].position[0], vertices[i2].position[1],
+                                      vertices[i2].position[2]};
+                utils::math::Vec3f fn = (p1 - p0).cross(p2 - p0);
+                float len = fn.length();
+                tris[t].normal =
+                    (len > 1e-7f) ? (fn * (1.0f / len)) : utils::math::Vec3f{0.0f, 1.0f, 0.0f};
+            }
+            else
+            {
+                tris[t].normal = {0.0f, 1.0f, 0.0f};
+            }
+        }
+
+        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> edgeToTris;
+        for (size_t t = 0; t < numTris; ++t)
+        {
+            for (int e = 0; e < 3; ++e)
+            {
+                uint32_t a = tris[t].v[e];
+                uint32_t b = tris[t].v[(e + 1) % 3];
+                if (a > b)
+                    std::swap(a, b);
+                edgeToTris[{a, b}].push_back(static_cast<uint32_t>(t));
+            }
+        }
+
+        std::vector<std::vector<uint32_t>> triNeighbors(numTris);
+        for (const auto& pair : edgeToTris)
+        {
+            const auto& list = pair.second;
+            for (size_t i = 0; i < list.size(); ++i)
+            {
+                for (size_t j = i + 1; j < list.size(); ++j)
+                {
+                    triNeighbors[list[i]].push_back(list[j]);
+                    triNeighbors[list[j]].push_back(list[i]);
+                }
+            }
+        }
+
+        std::vector<bool> visited(numTris, false);
+        int currentSurfaceId = 0;
+
+        for (size_t t = 0; t < numTris; ++t)
+        {
+            if (visited[t])
+                continue;
+
+            std::vector<uint32_t> queue;
+            queue.push_back(static_cast<uint32_t>(t));
+            visited[t] = true;
+            tris[t].surfaceId = currentSurfaceId;
+
+            size_t head = 0;
+            while (head < queue.size())
+            {
+                uint32_t curr = queue[head++];
+                const auto& curNorm = tris[curr].normal;
+
+                for (uint32_t nbr : triNeighbors[curr])
+                {
+                    if (!visited[nbr])
+                    {
+                        if (curNorm.dot(tris[nbr].normal) > 0.82f)
+                        {
+                            visited[nbr] = true;
+                            tris[nbr].surfaceId = currentSurfaceId;
+                            queue.push_back(nbr);
+                        }
+                    }
+                }
+            }
+            currentSurfaceId++;
+        }
+
+        for (size_t t = 0; t < numTris; ++t)
+        {
+            float sid = static_cast<float>(tris[t].surfaceId);
+            for (int k = 0; k < 3; ++k)
+            {
+                uint32_t vi = tris[t].v[k];
+                if (vi < vertices.size())
+                {
+                    vertices[vi].pbr[2] = sid;
+                }
+            }
+        }
     }
 
     // 4. CSG Difference / Subtract (Drilled Mechanical Bracket: Box minus cylindrical bore)
@@ -783,14 +1065,16 @@ class Primitives
         const float sideColor[3] = {0.20f, 0.72f, 0.85f};     // Anodized CAD Cyan / Teal
         const float chamferColor[3] = {0.95f, 0.82f, 0.40f};  // Polished Gold/Brass Highlight
 
-        // A. Top Cap (Y = profile.back().y, normal = (0, 1, 0))
+        // A. Top Cap (Surface 0, Y = profile.back().y, normal = (0, 1, 0))
         uint32_t topBase = static_cast<uint32_t>(vertices.size());
         size_t topRingIdx = profile.size() - 1;
         for (size_t i = 0; i < n; ++i)
         {
             auto pt = getRingVertex(topRingIdx, i);
-            vertices.push_back(
-                {{pt.x, pt.y, pt.z}, {0.0f, 1.0f, 0.0f}, {topColor[0], topColor[1], topColor[2]}});
+            vertices.push_back({{pt.x, pt.y, pt.z},
+                                {0.0f, 1.0f, 0.0f},
+                                {topColor[0], topColor[1], topColor[2]},
+                                {0.35f, 0.35f, 0.0f}});
         }
         for (const auto& tri : capTriangles)
         {
@@ -799,13 +1083,15 @@ class Primitives
             indices.push_back(topBase + tri[1]);
         }
 
-        // B. Bottom Cap (Y = profile.front().y, normal = (0, -1, 0))
+        // B. Bottom Cap (Surface 1, Y = profile.front().y, normal = (0, -1, 0))
         uint32_t botBase = static_cast<uint32_t>(vertices.size());
         for (size_t i = 0; i < n; ++i)
         {
             auto pt = getRingVertex(0, i);
-            vertices.push_back(
-                {{pt.x, pt.y, pt.z}, {0.0f, -1.0f, 0.0f}, {botColor[0], botColor[1], botColor[2]}});
+            vertices.push_back({{pt.x, pt.y, pt.z},
+                                {0.0f, -1.0f, 0.0f},
+                                {botColor[0], botColor[1], botColor[2]},
+                                {0.35f, 0.35f, 1.0f}});
         }
         for (const auto& tri : capTriangles)
         {
@@ -814,11 +1100,13 @@ class Primitives
             indices.push_back(botBase + tri[2]);
         }
 
-        // C. Side and Bevel Bands between consecutive rings
+        // C. Side and Bevel Bands between consecutive rings (Side Wall: Surface 2, Bevel: Surface
+        // 3)
         for (size_t r = 0; r + 1 < profile.size(); ++r)
         {
             bool isBevelBand = (profile[r].inset > 1e-4f || profile[r + 1].inset > 1e-4f);
             const float* bandColor = isBevelBand ? chamferColor : sideColor;
+            float sid = isBevelBand ? 3.0f : 2.0f;
 
             for (size_t i = 0; i < n; ++i)
             {
@@ -852,16 +1140,20 @@ class Primitives
                 uint32_t wBase = static_cast<uint32_t>(vertices.size());
                 vertices.push_back({{p00.x, p00.y, p00.z},
                                     {nx, ny, nz},
-                                    {bandColor[0], bandColor[1], bandColor[2]}});
+                                    {bandColor[0], bandColor[1], bandColor[2]},
+                                    {0.35f, 0.35f, sid}});
                 vertices.push_back({{p01.x, p01.y, p01.z},
                                     {nx, ny, nz},
-                                    {bandColor[0], bandColor[1], bandColor[2]}});
+                                    {bandColor[0], bandColor[1], bandColor[2]},
+                                    {0.35f, 0.35f, sid}});
                 vertices.push_back({{p11.x, p11.y, p11.z},
                                     {nx, ny, nz},
-                                    {bandColor[0], bandColor[1], bandColor[2]}});
+                                    {bandColor[0], bandColor[1], bandColor[2]},
+                                    {0.35f, 0.35f, sid}});
                 vertices.push_back({{p10.x, p10.y, p10.z},
                                     {nx, ny, nz},
-                                    {bandColor[0], bandColor[1], bandColor[2]}});
+                                    {bandColor[0], bandColor[1], bandColor[2]},
+                                    {0.35f, 0.35f, sid}});
 
                 indices.push_back(wBase + 0);
                 indices.push_back(wBase + 3);

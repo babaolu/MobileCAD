@@ -141,3 +141,65 @@ scripts/build_apk.sh                          # Automated one-step build & packa
 - `MOBILECAD_CONTEXT.md` — Session context, verified state, git log
 
 > `AGENTS.md` covers the how-to-build facts agents actually miss. Architecture details, testing status, and deeper build diagnostics live in the linked files.
+
+## Automated On-Device Debugging, UI Interaction & Visual Verification Playbook
+
+### 1. Wireless ADB Connection & Lifecycle Management
+- **Device & Port Discovery**: Ports on Android Wi-Fi debugging rotate dynamically upon toggle. Never hardcode ports; verify connection via:
+  ```bash
+  adb devices
+  # If offline or unattached:
+  adb connect 192.168.0.131:<PORT>
+  ```
+- **Launching MobileCAD**:
+  ```bash
+  adb shell "am force-stop com.mobilecad; am start -n com.mobilecad/android.app.NativeActivity"
+  ```
+- **Stopping MobileCAD**:
+  ```bash
+  adb shell "am force-stop com.mobilecad"
+  ```
+
+### 2. Real-Time Diagnostics & Logcat Tracing
+- Monitor engine status and touch events without spam:
+  ```bash
+  adb logcat -v threadtime | grep MobileCAD:
+  # Or filter directly:
+  adb logcat -s MobileCAD:V
+  ```
+- **Key Milestones to verify**:
+  1. `android_main ENTERED` — NativeActivity runtime alive.
+  2. `CADApp::init: starting` -> `CADApp::init: done` — Vulkan context, swapchain, pipeline, and buffers loaded.
+  3. `onWindowResized ENTRY` — Swapchain initialized or dynamically resized.
+  4. Stable 120 FPS frame cadence reported in ImGui stats without stutter or frame drops.
+  5. `android_main EXITING` — Orderly teardown reversed via RAII.
+
+### 3. Safe Touch & UI Input Automation
+- **Status Bar Clearance**: The Android notification/status bar intercepts touches at $y < 110\text{px}$. All ImGui windows and collapsed unhide buttons are pinned to $y \ge 110.0\text{f}$.
+- **OneUI System Gesture Clearance**: Swipes or taps too close to screen edges ($x < 60$ or $x > 900$ on 1080p display) trigger Samsung OneUI "Back" or "Edge Panel" gestures. Keep automated tap coordinates within safe central bounds:
+  - Safe UI interaction & tapping: $x \in [200, 600]$, $y \in [200, 1500]$.
+- **Simulating Tap**:
+  ```bash
+  adb shell input tap 400 300
+  ```
+- **Simulating Camera Arcball Orbit / Pan**:
+  ```bash
+  adb shell input swipe 500 800 300 600 250
+  ```
+- **Simulating Clean App Exit**:
+  ```bash
+  adb shell input keyevent 4
+  ```
+
+### 4. Lossless Framebuffer Visual Verification
+- Take screenshots directly from the hardware compositor:
+  ```bash
+  adb exec-out screencap -p > screen.png
+  ```
+- Use screenshots to visually verify UI visibility, button alignments, PBR specular highlights, and geometry without guesswork.
+
+### 5. Vulkan, Shader & Memory Invariants
+- **Push Constants std430 Limit**: Vulkan standard guarantees at least 128 bytes of push constants. Passing MVP (64B) + 3 rows of Normal Matrix (48B) + PBR parameters (16B) consumes exactly 128B. View-space position is reconstructed from clip-space coordinates `float3(clipPos.x * 0.25, -clipPos.y * 0.45, -clipPos.w)` in `simple.vert.slang` to preserve push constant capacity.
+- **Vertex Layout (48 bytes)**: Location 0 = `position` (`R32G32B32_SFLOAT`, 12B), Location 1 = `normal` (`R32G32B32_SFLOAT`, 12B), Location 2 = `color` (`R32G32B32_SFLOAT`, 12B), Location 3 = `pbr` (`R32G32B32_SFLOAT`, 12B: `{metallic, roughness, surfaceId}`).
+- **CSG Crease Normals**: Mesh builders and boolean operations (`fromManifold`) cluster surfaces with normal threshold $> 0.82f$ ($35^\circ$) and split vertex normals along sharp crease edges ($\mathbf{n}_1 \cdot \mathbf{n}_2 \le 0.707f$). Solid triangle vertices are guaranteed non-zero unit normals to avoid triggering unlit wireframe rendering paths in the fragment shader.
+- **16 KB ELF Alignment**: Native binaries and shared libraries must be compiled with `-Wl,-z,max-page-size=16384` and zip-aligned with `zipalign -P 16 4` for Android 15 compatibility.

@@ -61,6 +61,14 @@ struct PrimitiveParams
     float revolveOffset{0.35f};
 };
 
+struct SurfaceMaterial
+{
+    utils::math::Vec3f color{0.8f, 0.8f, 0.8f};
+    float metallic{0.35f};
+    float roughness{0.35f};
+    int preset{0};
+};
+
 struct SceneObject
 {
     std::string name{"Part_1"};
@@ -77,6 +85,56 @@ struct SceneObject
     float metallic{0.35f};
     float roughness{0.40f};
     manifold::Manifold localManifold;
+
+    std::vector<SurfaceMaterial> surfaceMaterials;
+    int selectedSurfaceId{-1};  // -1 = Whole Object, 0..K = specific surface
+
+    int getSurfaceCount() const
+    {
+        int maxId = -1;
+        for (const auto& v : cpuVertices)
+        {
+            int sid = static_cast<int>(std::round(v.pbr[2]));
+            if (sid > maxId)
+                maxId = sid;
+        }
+        return maxId + 1;
+    }
+
+    void ensureSurfaceMaterials()
+    {
+        int count = getSurfaceCount();
+        if (count <= 0)
+            return;
+        if (static_cast<int>(surfaceMaterials.size()) < count)
+        {
+            size_t oldSize = surfaceMaterials.size();
+            surfaceMaterials.resize(count);
+            for (size_t sid = oldSize; sid < static_cast<size_t>(count); ++sid)
+            {
+                bool found = false;
+                for (const auto& v : cpuVertices)
+                {
+                    if (static_cast<int>(std::round(v.pbr[2])) == static_cast<int>(sid))
+                    {
+                        surfaceMaterials[sid].color = {v.color[0], v.color[1], v.color[2]};
+                        surfaceMaterials[sid].metallic = v.pbr[0];
+                        surfaceMaterials[sid].roughness = v.pbr[1];
+                        surfaceMaterials[sid].preset = 8;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    surfaceMaterials[sid].color = materialColor;
+                    surfaceMaterials[sid].metallic = metallic;
+                    surfaceMaterials[sid].roughness = roughness;
+                    surfaceMaterials[sid].preset = materialPreset;
+                }
+            }
+        }
+    }
 
     std::unique_ptr<rendering::MeshBuffer> solidMesh;
     std::unique_ptr<rendering::MeshBuffer> wireframeMesh;
@@ -219,6 +277,8 @@ struct SceneObjectSnapshot
     utils::math::Vec3f aabbMax;
     std::vector<Vertex> cpuVertices;
     std::vector<uint32_t> cpuIndices;
+    std::vector<SurfaceMaterial> surfaceMaterials;
+    int selectedSurfaceId{-1};
 };
 
 struct HistoryState
@@ -427,6 +487,10 @@ class CADApp
     utils::math::Vec3f m_measurePtA{0.0f, 0.0f, 0.0f};
     utils::math::Vec3f m_measurePtB{0.0f, 0.0f, 0.0f};
     void renderCaliperOverlay();
+
+    // 3D Surface picking & Per-surface material
+    bool m_pickSurfaceMode{false};
+    void applySurfaceMaterial(SceneObject& obj, int targetSurfaceId, const SurfaceMaterial& mat);
 
     // Sync per-frame
     uint32_t m_currentFrame{0};
