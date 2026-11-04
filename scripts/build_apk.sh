@@ -131,6 +131,9 @@ apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:androi
 apksigner verify mobilecad-aligned.apk
 
 echo "=== Build Successful: $(pwd)/mobilecad-aligned.apk ==="
+mkdir -p build/apk
+cp mobilecad-aligned.apk build/apk/mobilecad-aligned.apk
+cp mobilecad-aligned.apk build/apk/MobileCAD-v1.0.0-arm64-v8a.apk
 
 # 8. Optional Auto-Install if device connected
 if command -v adb &>/dev/null && adb devices | grep -E "device$" >/dev/null 2>&1; then

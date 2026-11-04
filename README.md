@@ -1,14 +1,46 @@
 # MobileCAD
 
-[![Platform](https://img.shields.io/badge/Platform-Android%2014%2B%20(API%2034%2B)-green.svg)](https://developer.android.com)
+[![Latest Release](https://img.shields.io/github/v/release/babaolu/MobileCAD?color=brightgreen&label=Latest%20Release)](https://github.com/babaolu/MobileCAD/releases/latest)
+[![Download APK](https://img.shields.io/badge/Download-Release%20APK-brightgreen?logo=android)](https://github.com/babaolu/MobileCAD/releases/latest)
+[![Platform](https://img.shields.io/badge/Platform-Android%2010%2B%20(API%2029%2B)-green.svg)](https://developer.android.com)
 [![Architecture](https://img.shields.io/badge/Architecture-ARM64%20(arm64--v8a)-blue.svg)]()
-[![Vulkan](https://img.shields.io/badge/Graphics-Vulkan%201.4-red.svg)](https://www.vulkan.org)
+[![Vulkan](https://img.shields.io/badge/Graphics-Vulkan%201.1--1.4-red.svg)](https://www.vulkan.org)
 [![C++](https://img.shields.io/badge/Language-C%2B%2B20-orange.svg)]()
-[![Page%20Size](https://img.shields.io/badge/ELF%20Alignment-16%20KB%20Compliant-brightgreen.svg)]()
+[![Page Size](https://img.shields.io/badge/ELF%20Alignment-16%20KB%20Compliant-brightgreen.svg)]()
 
-A high-performance, native Android 3D CAD application built from the ground up in C++20 and **Vulkan 1.4** (`VK_API_VERSION_1_4`). Designed specifically for touchscreens and active styluses (Samsung S-Pen), MobileCAD bypasses bloated intermediate abstractions (no X11, no Wayland, no GLFW, no Gradle) by interfacing directly with Android's `NativeActivity` and `ANativeWindow`.
+A high-performance, native Android 3D CAD application built from the ground up in C++20 and **Vulkan 1.1–1.4** with Cook-Torrance GGX PBR specular shading. Designed specifically for touchscreens and active styluses (Samsung S-Pen), MobileCAD bypasses bloated intermediate abstractions (no X11, no Wayland, no GLFW, no Gradle) by interfacing directly with Android's `NativeActivity` and `ANativeWindow`.
 
-The entire engineering toolchain is self-hosting: configured, compiled, packaged, aligned, signed, and deployed **100% on-device** inside native Termux on a Samsung Galaxy S23 Ultra (Snapdragon 8 Gen 2 / Adreno 740 GPU).
+The entire engineering toolchain is self-hosting: configured, compiled, packaged, aligned, signed, and deployed **100% on-device** inside native Termux on a Samsung Galaxy S23 Ultra (Snapdragon 8 Gen 2 / Adreno 740 GPU), with automated continuous cloud packaging via GitHub Actions.
+
+---
+
+## Download Latest APK Release
+
+Get the latest pre-compiled, 16 KB page-aligned, and signed release APK:
+
+[![Download APK](https://img.shields.io/badge/Download%20APK-v1.0.0%20(ARM64)-brightgreen?style=for-the-badge&logo=android)](https://github.com/babaolu/MobileCAD/releases/latest)
+
+- **Latest Release Page**: [https://github.com/babaolu/MobileCAD/releases/latest](https://github.com/babaolu/MobileCAD/releases/latest)
+- **Direct APK Download**: [`MobileCAD-arm64-v8a.apk`](https://github.com/babaolu/MobileCAD/releases/latest/download/MobileCAD-arm64-v8a.apk)
+
+```bash
+# Direct on-device install via ADB:
+adb install -r MobileCAD-arm64-v8a.apk
+adb shell "am start -n com.mobilecad/android.app.NativeActivity"
+```
+
+---
+
+## System & Device Requirements
+
+| Requirement Category | Specification & Details |
+|:---|:---|
+| **CPU Architecture** | **`arm64-v8a`** (64-bit ARMv8-A / ARMv9-A). 32-bit `armeabi-v7a` and `x86_64` emulators are not targeted. |
+| **Android OS Version** | **Minimum:** Android 10 (API 29)<br>**Target:** Android 14–15+ (API 34+)<br>**16 KB Memory Page Compliance:** Fully aligned and verified for Android 15+ kernels (`-Wl,-z,max-page-size=16384` and `zipalign -P 16 4`). |
+| **GPU & Vulkan Driver** | **Hardware Vulkan 1.1 / 1.3 / 1.4 Driver** with SPIR-V 1.3 support and `VK_FORMAT_D32_SFLOAT` hardware depth buffering.<br>*Supported GPUs include:* Qualcomm Adreno 600/700/800 series, ARM Mali-G76/G78/Immortalis series, Samsung Xclipse (AMD RDNA2/3). |
+| **Display & Refresh Rate** | Capacitive multi-touch screen supporting **60Hz, 90Hz, or 120Hz** locked frame cadence via Vulkan FIFO presentation mode (`VK_PRESENT_MODE_FIFO_KHR`). |
+| **Stylus Support** | Full native support for **Samsung S-Pen** and active styluses (pressure-free hover, sub-millimeter 2D freehand/spline drawing, and 3D surface picking). Standard touch is fully supported. |
+| **File Storage Access** | Standard POSIX read/write access to `/sdcard/Download/` for CAD file exchange (`.mcad` projects, `.stl` meshes, and `.obj` exports), with automatic fallback to app-private internal storage (`/data/user/0/com.mobilecad/files/`). |
 
 ---
 

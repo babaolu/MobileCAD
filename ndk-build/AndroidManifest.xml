@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.mobilecad" android:versionCode="1" android:versionName="1.1"
+    package="com.mobilecad" android:versionCode="1" android:versionName="1.0.0"
     xmlns:tools="http://schemas.android.com/tools">
-    <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="34" />
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="34" />
     <uses-feature android:name="android.hardware.vulkan" android:required="true" />
     <application android:label="MobileCAD" android:hasCode="true"
         android:extractNativeLibs="true" android:debuggable="true"
@@ -13,7 +13,7 @@
             android:configChanges="orientation|screenLayout|screenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize">
             <meta-data android:name="android.app.lib_name" android:value="mobilecad" />
-            <meta-data android:name="android.app.vulkanFeatures" android:value="Vulkan 1.4" />
+            <meta-data android:name="android.app.vulkanFeatures" android:value="Vulkan 1.1-1.4" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

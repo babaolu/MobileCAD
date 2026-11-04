@@ -11,29 +11,48 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 # ----------------------------------------------------------------------
-# NDK paths from toolchain
+# NDK paths from toolchain or environment
 # ----------------------------------------------------------------------
 if(NOT DEFINED NDK_ROOT)
-    message(FATAL_ERROR "NDK_ROOT not set by toolchain file")
+    if(DEFINED ANDROID_NDK)
+        set(NDK_ROOT "${ANDROID_NDK}")
+    elseif(DEFINED ENV{ANDROID_NDK_HOME})
+        set(NDK_ROOT "$ENV{ANDROID_NDK_HOME}")
+    elseif(DEFINED ENV{ANDROID_NDK_ROOT})
+        set(NDK_ROOT "$ENV{ANDROID_NDK_ROOT}")
+    else()
+        message(FATAL_ERROR "NDK_ROOT not set by toolchain file or environment")
+    endif()
 endif()
 
 # API-level library directory (matches target triple aarch64-linux-android34)
 set(NDK_LIB_DIR "${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/34")
 message(STATUS "NDK_LIB_DIR=${NDK_LIB_DIR}")
 
+# Locate Clang resource library directory
+file(GLOB CLANG_VERSION_DIRS "${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*")
+if(CLANG_VERSION_DIRS)
+    list(GET CLANG_VERSION_DIRS 0 CLANG_DIR)
+else()
+    set(CLANG_DIR "${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17")
+endif()
+message(STATUS "CLANG_DIR=${CLANG_DIR}")
+
 # ----------------------------------------------------------------------
 # Prepare isolated vk_video headers (avoid duplicate Vulkan C++ binding)
 # The NDK's vulkan_core.h includes vk_video headers. The NDK's copy is incomplete.
-# Use the full set from the Vulkan headers fetched as a dependency of Slang.
-set(VULKAN_VIDEO_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../external/slang/build/_deps/vulkan_headers-src/include/vk_video")
-set(VULKAN_VIDEO_DST "${CMAKE_BINARY_DIR}/include")
-if(EXISTS "${VULKAN_VIDEO_SRC}")
-    file(MAKE_DIRECTORY "${VULKAN_VIDEO_DST}")
-    file(COPY "${VULKAN_VIDEO_SRC}" DESTINATION "${VULKAN_VIDEO_DST}")
-    message(STATUS "Copied vk_video headers to ${VULKAN_VIDEO_DST}/vk_video")
+# Use the full set from include/vk_video (or Slang build deps fallback).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../include/vk_video")
+    set(VULKAN_VIDEO_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../include/vk_video")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../external/slang/build/_deps/vulkan_headers-src/include/vk_video")
+    set(VULKAN_VIDEO_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../external/slang/build/_deps/vulkan_headers-src/include/vk_video")
 else()
-    message(FATAL_ERROR "vk_video headers not found at ${VULKAN_VIDEO_SRC}")
+    message(FATAL_ERROR "vk_video headers not found at include/vk_video or external/slang")
 endif()
+set(VULKAN_VIDEO_DST "${CMAKE_BINARY_DIR}/include")
+file(MAKE_DIRECTORY "${VULKAN_VIDEO_DST}")
+file(COPY "${VULKAN_VIDEO_SRC}" DESTINATION "${VULKAN_VIDEO_DST}")
+message(STATUS "Copied vk_video headers from ${VULKAN_VIDEO_SRC} to ${VULKAN_VIDEO_DST}/vk_video")
 
 # ----------------------------------------------------------------------
 # Find system libraries (android, log, vulkan) from NDK
@@ -118,9 +137,9 @@ target_link_options(mobilecad PRIVATE
     "-Wl,-z,max-page-size=16384"
     "-rtlib=compiler-rt"
     "-unwindlib=libunwind"
-    "-resource-dir=${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17"
-    "-L${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux"
-    "-L${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/17/lib/linux/aarch64"
+    "-resource-dir=${CLANG_DIR}"
+    "-L${CLANG_DIR}/lib/linux"
+    "-L${CLANG_DIR}/lib/linux/aarch64"
     "-L${CMAKE_SYSROOT}/usr/lib/aarch64-linux-android/34"
     "-L${CMAKE_SYSROOT}/usr/lib/aarch64-linux-android"
 )

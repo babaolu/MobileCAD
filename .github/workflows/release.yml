@@ -1,0 +1,150 @@
+name: Build & Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Release MobileCAD APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Ninja & CMake
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake zip
+
+      - name: Set up Android SDK & NDK
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME}" >> $GITHUB_ENV
+          # Verify or install required NDK and build-tools
+          if [ -d "${ANDROID_HOME}/ndk/26.1.10909125" ]; then
+            echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/26.1.10909125" >> $GITHUB_ENV
+          else
+            echo "Installing Android NDK 26.1.10909125..."
+            yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --sdk_root=${ANDROID_HOME} "ndk;26.1.10909125" "platforms;android-34" "build-tools;34.0.0"
+            echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/26.1.10909125" >> $GITHUB_ENV
+          fi
+
+      - name: Clone External Dependencies (Dear ImGui & Manifold)
+        run: |
+          mkdir -p external
+          if [ ! -d "external/imgui" ]; then
+            git clone --depth 1 -b docking https://github.com/ocornut/imgui.git external/imgui
+          fi
+          if [ ! -d "external/manifold" ]; then
+            git clone --depth 1 https://github.com/elalish/manifold.git external/manifold
+          fi
+
+      - name: Build Native Library (16 KB Aligned libmobilecad.so)
+        run: |
+          export ANDROID_NDK="${ANDROID_NDK_HOME}"
+          cmake -S ndk-build -B build \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-34 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -G Ninja
+          ninja -C build
+
+      - name: Re-link 16 KB Aligned libc++_shared.so
+        run: |
+          mkdir -p build/mcad-tmp
+          CLANG_DIR=$(ls -d ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/* | head -n1)
+          ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ \
+            -shared --target=aarch64-linux-android34 \
+            -nostdlib++ \
+            -Wl,-z,max-page-size=16384 \
+            -Wl,-soname,libc++_shared.so \
+            -Wl,--whole-archive \
+              "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_static.a" \
+              "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++abi.a" \
+            -Wl,--no-whole-archive \
+            -rtlib=compiler-rt -unwindlib=libunwind \
+            -resource-dir="${CLANG_DIR}" \
+            -L"${CLANG_DIR}/lib/linux/aarch64" \
+            -L"${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/34" \
+            -lc -lm -ldl \
+            -o build/mcad-tmp/libc++_shared.so
+
+      - name: Compile classes.dex
+        run: |
+          mkdir -p build/mcad-tmp/java build/mcad-tmp/classes build/mcad-tmp/dex
+          echo 'package com.mobilecad; public class R {}' > build/mcad-tmp/java/R.java
+          echo 'package com.mobilecad; public class BuildConfig {}' > build/mcad-tmp/java/BuildConfig.java
+          javac -source 8 -target 8 -bootclasspath "${ANDROID_HOME}/platforms/android-34/android.jar" \
+            -d build/mcad-tmp/classes build/mcad-tmp/java/*.java
+          "${ANDROID_HOME}/build-tools/34.0.0/d8" \
+            --lib "${ANDROID_HOME}/platforms/android-34/android.jar" \
+            --output build/mcad-tmp/dex \
+            build/mcad-tmp/classes/com/mobilecad/*.class
+
+      - name: Package, 16 KB Align & Sign APK
+        run: |
+          rm -rf staging
+          mkdir -p staging/lib/arm64-v8a staging/assets/shaders
+          cp ndk-build/AndroidManifest.xml staging/AndroidManifest.xml
+          cp build/libmobilecad.so staging/lib/arm64-v8a/
+          cp build/mcad-tmp/libc++_shared.so staging/lib/arm64-v8a/
+          cp -r assets/* staging/assets/
+          cp -f assets/shaders/*.spv staging/assets/shaders/
+          cp build/mcad-tmp/dex/classes.dex staging/
+
+          "${ANDROID_HOME}/build-tools/34.0.0/aapt2" link \
+            -I "${ANDROID_HOME}/platforms/android-34/android.jar" \
+            --manifest staging/AndroidManifest.xml \
+            -A staging/assets \
+            -o mobilecad-base.apk
+
+          (cd staging && zip -ur ../mobilecad-base.apk classes.dex)
+          (cd staging && zip -0 -ur ../mobilecad-base.apk lib/arm64-v8a/)
+
+          "${ANDROID_HOME}/build-tools/34.0.0/zipalign" -v -P 16 4 mobilecad-base.apk MobileCAD-arm64-v8a.apk
+
+          keytool -genkey -v -keystore release.keystore -storepass android -alias androidreleasekey \
+            -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=MobileCAD Release,O=MobileCAD,C=US"
+
+          "${ANDROID_HOME}/build-tools/34.0.0/apksigner" sign \
+            --ks release.keystore --ks-pass pass:android --key-pass pass:android \
+            --ks-key-alias androidreleasekey MobileCAD-arm64-v8a.apk
+
+          "${ANDROID_HOME}/build-tools/34.0.0/apksigner" verify MobileCAD-arm64-v8a.apk
+
+          mkdir -p build/apk
+          cp MobileCAD-arm64-v8a.apk build/apk/MobileCAD-arm64-v8a.apk
+          cp MobileCAD-arm64-v8a.apk build/apk/MobileCAD-v1.0.0-arm64-v8a.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MobileCAD-arm64-v8a
+          path: MobileCAD-arm64-v8a.apk
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: MobileCAD ${{ github.ref_name }} (ARM64 Vulkan 3D CAD Studio)
+          files: |
+            MobileCAD-arm64-v8a.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
