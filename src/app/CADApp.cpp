@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "imgui_impl_android.h"
 #include "imgui_impl_vulkan.h"
+#include "io/MeshImporter.h"
 #include "io/SceneSerializer.h"
 #include "utils/math/Mat4.h"
 
@@ -19,6 +20,57 @@
 
 namespace app
 {
+
+static void applyMaterialPreset(SceneObject& obj, int preset)
+{
+    obj.materialPreset = preset;
+    switch (preset)
+    {
+    case 0:  // Default (Multi-Face / Vertex Colors)
+        obj.metallic = 0.15f;
+        obj.roughness = 0.50f;
+        break;
+    case 1:  // Brushed Aluminum
+        obj.materialColor = {0.83f, 0.85f, 0.88f};
+        obj.metallic = 0.85f;
+        obj.roughness = 0.35f;
+        break;
+    case 2:  // Polished Brass / Gold
+        obj.materialColor = {0.95f, 0.78f, 0.35f};
+        obj.metallic = 0.90f;
+        obj.roughness = 0.20f;
+        break;
+    case 3:  // Anodized Blue
+        obj.materialColor = {0.15f, 0.45f, 0.90f};
+        obj.metallic = 0.70f;
+        obj.roughness = 0.30f;
+        break;
+    case 4:  // Stainless Steel
+        obj.materialColor = {0.75f, 0.76f, 0.78f};
+        obj.metallic = 0.92f;
+        obj.roughness = 0.25f;
+        break;
+    case 5:  // Matte Red ABS
+        obj.materialColor = {0.88f, 0.18f, 0.18f};
+        obj.metallic = 0.05f;
+        obj.roughness = 0.70f;
+        break;
+    case 6:  // Polished Copper
+        obj.materialColor = {0.92f, 0.55f, 0.40f};
+        obj.metallic = 0.95f;
+        obj.roughness = 0.18f;
+        break;
+    case 7:  // Titanium Gunmetal
+        obj.materialColor = {0.45f, 0.48f, 0.52f};
+        obj.metallic = 0.80f;
+        obj.roughness = 0.38f;
+        break;
+    case 8:  // Custom Color
+        break;
+    default:
+        break;
+    }
+}
 
 CADApp::CADApp(ANativeWindow* window)
 {
@@ -1452,6 +1504,175 @@ bool CADApp::loadWorkspace()
     return true;
 }
 
+bool CADApp::importMeshFile(const std::string& filepath)
+{
+    if (!m_vkContext)
+        return false;
+
+    if (!std::filesystem::exists(filepath))
+    {
+        m_importStatus = "Import failed: File not found";
+        LOGE("importMeshFile: file not found: %s", filepath.c_str());
+        return false;
+    }
+
+    std::vector<rendering::Vertex> vertices;
+    std::vector<uint32_t> indices;
+
+    bool ok = io::MeshImporter::importMesh(filepath, vertices, indices);
+    if (!ok || vertices.empty() || indices.size() < 3)
+    {
+        m_importStatus = "Import failed: Invalid or empty mesh";
+        LOGE("importMeshFile: failed to parse %s", filepath.c_str());
+        return false;
+    }
+
+    // Auto-Centering and Millimeter Auto-Scaling
+    float minX = 1e9f, maxX = -1e9f;
+    float minY = 1e9f, maxY = -1e9f;
+    float minZ = 1e9f, maxZ = -1e9f;
+
+    for (const auto& v : vertices)
+    {
+        minX = std::min(minX, v.position[0]);
+        maxX = std::max(maxX, v.position[0]);
+        minY = std::min(minY, v.position[1]);
+        maxY = std::max(maxY, v.position[1]);
+        minZ = std::min(minZ, v.position[2]);
+        maxZ = std::max(maxZ, v.position[2]);
+    }
+
+    float dimX = maxX - minX;
+    float dimY = maxY - minY;
+    float dimZ = maxZ - minZ;
+    float maxDim = std::max({dimX, dimY, dimZ});
+
+    float scaleFactor = 1.0f;
+    if (maxDim > 15.0f)
+    {
+        scaleFactor = 3.0f / maxDim;
+        LOGI("importMeshFile: auto-scaling millimeter model (maxDim=%.1f, scaleFactor=%.4f)",
+             maxDim, scaleFactor);
+    }
+
+    float centerX = (minX + maxX) * 0.5f;
+    float centerZ = (minZ + maxZ) * 0.5f;
+    float baseY = minY;
+
+    for (auto& v : vertices)
+    {
+        v.position[0] = (v.position[0] - centerX) * scaleFactor;
+        v.position[1] = (v.position[1] - baseY) * scaleFactor;
+        v.position[2] = (v.position[2] - centerZ) * scaleFactor;
+    }
+
+    pushUndoState();
+
+    for (auto& obj : m_objects)
+    {
+        obj.isSelected = false;
+    }
+
+    SceneObject newObj;
+    std::string stem = std::filesystem::path(filepath).stem().string();
+    if (stem.empty())
+        stem = "Imported_" + std::to_string(m_objects.size() + 1);
+    newObj.name = stem;
+    newObj.primitiveType = PrimitiveType::Box;
+    newObj.params.csgMode = -1;  // Baked / Custom mesh
+    newObj.position = {0.0f, 0.0f, 0.0f};
+    newObj.rotationDeg = {0.0f, 0.0f, 0.0f};
+    newObj.scale = {1.0f, 1.0f, 1.0f};
+    newObj.isSelected = true;
+    newObj.isNegative = false;
+    newObj.materialPreset = 0;
+    newObj.materialColor = {0.75f, 0.78f, 0.82f};
+    newObj.metallic = 0.35f;
+    newObj.roughness = 0.40f;
+
+    newObj.cpuVertices = std::move(vertices);
+    newObj.cpuIndices = std::move(indices);
+    newObj.updateAABB();
+
+    // Watertight manifold building for CSG & Caliper compatibility
+    newObj.localManifold = newObj.buildManifoldFromMesh();
+
+    auto device = m_vkContext->getDevice();
+    auto physDevice = m_vkContext->getPhysicalDevice();
+
+    newObj.solidMesh = std::make_unique<rendering::MeshBuffer>(
+        device, physDevice, newObj.cpuVertices, newObj.cpuIndices);
+    auto wireLines =
+        geometry::Primitives::createWireframeLines(newObj.cpuVertices, newObj.cpuIndices);
+    newObj.wireframeMesh = std::make_unique<rendering::MeshBuffer>(device, physDevice, wireLines);
+
+    auto selectedWireLines = wireLines;
+    for (auto& v : selectedWireLines)
+    {
+        v.color[0] = 1.0f;
+        v.color[1] = 0.78f;
+        v.color[2] = 0.10f;
+    }
+    newObj.selectedWireframeMesh =
+        std::make_unique<rendering::MeshBuffer>(device, physDevice, selectedWireLines);
+
+    m_objects.push_back(std::move(newObj));
+    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+
+    uint32_t numTris = static_cast<uint32_t>(m_objects.back().cpuIndices.size() / 3);
+    char outBuf[256];
+    snprintf(outBuf, sizeof(outBuf), "Imported %s (%u tris)", stem.c_str(), numTris);
+    m_importStatus = outBuf;
+    LOGI("%s", outBuf);
+    return true;
+}
+
+void CADApp::refreshDiscoveredFiles()
+{
+    m_discoveredMeshFiles.clear();
+    const std::vector<std::string> scanDirs = {"/sdcard/Download",
+                                               "/data/data/com.mobilecad/files"};
+
+    for (const auto& dirPath : scanDirs)
+    {
+        try
+        {
+            if (std::filesystem::exists(dirPath))
+            {
+                for (const auto& entry : std::filesystem::directory_iterator(dirPath))
+                {
+                    if (entry.is_regular_file())
+                    {
+                        std::string ext = entry.path().extension().string();
+                        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                        if (ext == ".stl" || ext == ".obj")
+                        {
+                            m_discoveredMeshFiles.push_back(entry.path().string());
+                        }
+                    }
+                }
+            }
+        }
+        catch (const std::exception& e)
+        {
+            LOGE("refreshDiscoveredFiles: error scanning %s: %s", dirPath.c_str(), e.what());
+        }
+    }
+
+    std::sort(m_discoveredMeshFiles.begin(), m_discoveredMeshFiles.end());
+    m_selectedMeshFileIdx = 0;
+
+    if (!m_discoveredMeshFiles.empty())
+    {
+        m_importStatus = "Found " + std::to_string(m_discoveredMeshFiles.size()) + " mesh file(s)";
+    }
+    else
+    {
+        m_importStatus = "No .stl or .obj files found in /sdcard/Download/";
+    }
+    LOGI("%s", m_importStatus.c_str());
+}
+
 HistoryState CADApp::captureCurrentState() const
 {
     HistoryState state;
@@ -1469,6 +1690,10 @@ HistoryState CADApp::captureCurrentState() const
         snap.scale = obj.scale;
         snap.isSelected = obj.isSelected;
         snap.isNegative = obj.isNegative;
+        snap.materialPreset = obj.materialPreset;
+        snap.materialColor = obj.materialColor;
+        snap.metallic = obj.metallic;
+        snap.roughness = obj.roughness;
         snap.aabbMin = obj.aabbMin;
         snap.aabbMax = obj.aabbMax;
         snap.cpuVertices = obj.cpuVertices;
@@ -1502,6 +1727,10 @@ void CADApp::restoreState(const HistoryState& state)
         obj.scale = snap.scale;
         obj.isSelected = snap.isSelected;
         obj.isNegative = snap.isNegative;
+        obj.materialPreset = snap.materialPreset;
+        obj.materialColor = snap.materialColor;
+        obj.metallic = snap.metallic;
+        obj.roughness = snap.roughness;
         obj.aabbMin = snap.aabbMin;
         obj.aabbMax = snap.aabbMax;
         obj.cpuVertices = snap.cpuVertices;
@@ -2871,6 +3100,48 @@ void CADApp::renderImGui()
                         rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
                     }
                 }
+
+                if (ImGui::CollapsingHeader("Material & Surface Finish"))
+                {
+                    static const char* kMaterialPresets[] = {
+                        "Default (Multi-Face)", "Brushed Aluminum",  "Polished Brass / Gold",
+                        "Anodized Blue",        "Stainless Steel",   "Matte Red ABS",
+                        "Polished Copper",      "Titanium Gunmetal", "Custom Color"};
+
+                    int currentPreset = obj.materialPreset;
+                    if (currentPreset < 0 || currentPreset > 8)
+                        currentPreset = 8;
+
+                    if (ImGui::Combo("Preset", &currentPreset, kMaterialPresets,
+                                     IM_ARRAYSIZE(kMaterialPresets)))
+                    {
+                        pushUndoState();
+                        applyMaterialPreset(obj, currentPreset);
+                    }
+
+                    if (currentPreset > 0)
+                    {
+                        float col[3] = {obj.materialColor.x, obj.materialColor.y,
+                                        obj.materialColor.z};
+                        if (ImGui::ColorEdit3("Part Color", col))
+                        {
+                            obj.materialColor = {col[0], col[1], col[2]};
+                            obj.materialPreset = 8;
+                        }
+                    }
+
+                    if (drawNumericControl("Metallic", &obj.metallic, 0.05f, 0.0f, 1.0f, "%.2f",
+                                           [&obj]() { obj.materialPreset = 8; }))
+                    {
+                        obj.materialPreset = 8;
+                    }
+
+                    if (drawNumericControl("Roughness", &obj.roughness, 0.05f, 0.04f, 1.0f, "%.2f",
+                                           [&obj]() { obj.materialPreset = 8; }))
+                    {
+                        obj.materialPreset = 8;
+                    }
+                }
             }
 
             // 3D Point-to-Point Caliper & Measurement
@@ -2962,6 +3233,57 @@ void CADApp::renderImGui()
                                        m_exportStatus.c_str());
                 }
                 ImGui::TextDisabled("Exports: /sdcard/Download/mobilecad_part.{stl,obj}");
+
+                ImGui::Separator();
+                ImGui::Text("Import 3D Mesh (.stl / .obj):");
+                if (ImGui::Button("Scan /sdcard/Download/ for Meshes", ImVec2(-1.0f, 0.0f)))
+                {
+                    refreshDiscoveredFiles();
+                }
+                if (ImGui::Button("Import mobilecad_part.stl", ImVec2(-1.0f, 0.0f)))
+                {
+                    importMeshFile("/sdcard/Download/mobilecad_part.stl");
+                }
+                if (ImGui::Button("Import mobilecad_part.obj", ImVec2(-1.0f, 0.0f)))
+                {
+                    importMeshFile("/sdcard/Download/mobilecad_part.obj");
+                }
+
+                if (!m_discoveredMeshFiles.empty())
+                {
+                    std::vector<const char*> fileItems;
+                    std::vector<std::string> fileLabels;
+                    fileItems.reserve(m_discoveredMeshFiles.size());
+                    fileLabels.reserve(m_discoveredMeshFiles.size());
+                    for (const auto& path : m_discoveredMeshFiles)
+                    {
+                        fileLabels.push_back(std::filesystem::path(path).filename().string());
+                    }
+                    for (const auto& l : fileLabels)
+                    {
+                        fileItems.push_back(l.c_str());
+                    }
+
+                    if (m_selectedMeshFileIdx < 0 ||
+                        m_selectedMeshFileIdx >= static_cast<int>(fileItems.size()))
+                        m_selectedMeshFileIdx = 0;
+
+                    ImGui::Combo("Files", &m_selectedMeshFileIdx, fileItems.data(),
+                                 static_cast<int>(fileItems.size()));
+                    if (ImGui::Button("Import Selected File", ImVec2(-1.0f, 0.0f)))
+                    {
+                        if (m_selectedMeshFileIdx >= 0 &&
+                            m_selectedMeshFileIdx < static_cast<int>(m_discoveredMeshFiles.size()))
+                        {
+                            importMeshFile(m_discoveredMeshFiles[m_selectedMeshFileIdx]);
+                        }
+                    }
+                }
+                if (!m_importStatus.empty())
+                {
+                    ImGui::TextColored(ImVec4(0.3f, 0.9f, 1.0f, 1.0f), "%s",
+                                       m_importStatus.c_str());
+                }
             }
 
             // 6. Graceful Exit
@@ -3793,7 +4115,18 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
 
             auto model = obj.getModelMatrix();
             auto normalMatrix = model.inverted().transposed();
+
+            // Pack custom material RGB into normalMatrix column 3
+            normalMatrix(0, 3) = obj.materialColor.x;
+            normalMatrix(1, 3) = obj.materialColor.y;
+            normalMatrix(2, 3) = obj.materialColor.z;
+
+            // Pack PBR parameters into normalMatrix row 3
+            normalMatrix(3, 0) = obj.metallic;
+            normalMatrix(3, 1) = obj.roughness;
+            normalMatrix(3, 2) = (obj.materialPreset > 0) ? 1.0f : 0.0f;
             normalMatrix(3, 3) = 1.0f;
+
             PushConstantData pcData{viewProj * model, normalMatrix};
             VkBuffer vertexBuffers[] = {obj.solidMesh->getVertexBuffer()};
             VkDeviceSize offsets[] = {0};
@@ -3824,7 +4157,17 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
 
             auto model = obj.getModelMatrix();
             auto normalMatrix = model.inverted().transposed();
+
+            // Red cutter tint
+            normalMatrix(0, 3) = 0.95f;
+            normalMatrix(1, 3) = 0.35f;
+            normalMatrix(2, 3) = 0.30f;
+
+            normalMatrix(3, 0) = 0.10f;
+            normalMatrix(3, 1) = 0.60f;
+            normalMatrix(3, 2) = 1.0f;
             normalMatrix(3, 3) = 0.38f;
+
             PushConstantData pcData{viewProj * model, normalMatrix};
             VkBuffer vertexBuffers[] = {obj.solidMesh->getVertexBuffer()};
             VkDeviceSize offsets[] = {0};
@@ -3866,6 +4209,9 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
 
         auto model = obj.getModelMatrix();
         auto normalMatrix = model.inverted().transposed();
+        normalMatrix(3, 0) = 0.0f;
+        normalMatrix(3, 1) = 0.5f;
+        normalMatrix(3, 2) = 0.0f;
         normalMatrix(3, 3) = 1.0f;
         PushConstantData pcData{viewProj * model, normalMatrix};
         VkBuffer vertexBuffers[] = {meshToDraw->getVertexBuffer()};

@@ -72,6 +72,10 @@ struct SceneObject
     utils::math::Vec3f scale{1.0f, 1.0f, 1.0f};
     bool isSelected{false};
     bool isNegative{false};
+    int materialPreset{0};
+    utils::math::Vec3f materialColor{0.75f, 0.78f, 0.82f};
+    float metallic{0.35f};
+    float roughness{0.40f};
     manifold::Manifold localManifold;
 
     std::unique_ptr<rendering::MeshBuffer> solidMesh;
@@ -207,6 +211,10 @@ struct SceneObjectSnapshot
     utils::math::Vec3f scale;
     bool isSelected{false};
     bool isNegative{false};
+    int materialPreset{0};
+    utils::math::Vec3f materialColor{0.75f, 0.78f, 0.82f};
+    float metallic{0.35f};
+    float roughness{0.40f};
     utils::math::Vec3f aabbMin;
     utils::math::Vec3f aabbMax;
     std::vector<Vertex> cpuVertices;
@@ -244,10 +252,13 @@ class CADApp
     bool exportOBJ();
     bool saveWorkspace();
     bool loadWorkspace();
+    bool importMeshFile(const std::string& filepath);
+    void refreshDiscoveredFiles();
     void setExportPath(const std::string& path) { m_exportPath = path; }
     const std::string& getExportPath() const { return m_exportPath; }
     const std::string& getExportStatus() const { return m_exportStatus; }
     const std::string& getProjectStatus() const { return m_projectStatus; }
+    const std::string& getImportStatus() const { return m_importStatus; }
 
     // 2D Sketch & Extrude / Revolve controls
     void rebuildSketchMesh();
@@ -366,6 +377,9 @@ class CADApp
     std::string m_exportPath{"/data/data/com.mobilecad/files/part_export.stl"};
     std::string m_exportStatus;
     std::string m_projectStatus;
+    std::string m_importStatus;
+    std::vector<std::string> m_discoveredMeshFiles;
+    int m_selectedMeshFileIdx{0};
 
     // Lifecycle exit callback
     std::function<void()> m_exitCallback;

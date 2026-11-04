@@ -105,17 +105,25 @@ MobileCAD/
 │   ├── app/
 │   │   ├── CADApp.h                 # Main application controller & touch dispatcher
 │   │   └── CADApp.cpp               # Vulkan swapchain, render pass, and frame orchestrator
+│   ├── geometry/
+│   │   └── Primitives.h             # 3D CAD Primitives, CSG, Splines, Wireframes, Revolve
+│   ├── io/
+│   │   ├── MeshImporter.h           # Watertight Binary/ASCII STL & Wavefront OBJ importer
+│   │   ├── MeshExporter.h           # Binary STL and multi-part Wavefront OBJ exporter
+│   │   └── SceneSerializer.h        # Binary .mcad workspace serializer (v2 with PBR materials)
 │   ├── rendering/
 │   │   ├── Camera.h                 # Spherical Arcball camera (orbit, pan, zoom)
+│   │   ├── MeshBuffer.{h,cpp}       # Vulkan GPU vertex and index buffer abstraction
 │   │   ├── VulkanContext.{h,cpp}    # VkInstance, VkDevice, Surface, Queues, Sync objects
 │   │   ├── Swapchain.{h,cpp}        # VkSwapchainKHR, VkImageViews, Depth buffer (D32_SFLOAT)
 │   │   ├── Pipeline.{h,cpp}         # SPIR-V asset loader and VkShaderModule factory
 │   │   └── shaders/
-│   │       ├── simple.vert.slang    # Procedural 3D reference cube & MVP transform
-│   │       └── simple.frag.slang    # Fragment color output
+│   │       ├── simple.vert.slang    # Vertex transform & PBR push constant unpacking
+│   │       └── simple.frag.slang    # Studio PBR Metallic-Roughness lighting & CAD unlit lines
 │   └── utils/math/
 │       ├── Vec3.h                   # 3D vector math (dot, cross, normalize)
-│       └── Mat4.h                   # 4x4 matrix transforms (perspective, lookAt, rotations)
+│       ├── Mat4.h                   # 4x4 matrix transforms (perspective, lookAt, rotations)
+│       └── Ray.h                    # 3D Ray-AABB and Möller-Trumbore Ray-Triangle intersection
 └── README.md
 ```
 
@@ -183,6 +191,14 @@ MobileCAD: onWindowResized: rebuild complete swap=1080x2316
 - [x] **Phase 9 — Memory Allocator & CAD Grid**: Device-local vertex/index buffers (`MeshBuffer`), XYZ triad, lit solid mesh pipeline, and CAD reference grid.
 - [x] **Phase 10 — Viewport UI Overlay**: Dear ImGui Vulkan/Android HUD overlay, camera view presets, and parametric solid primitives.
 - [x] **Phase 11 — Geometric Modeling Kernel & STL Export**: Manifold C++20 CSG Boolean kernel (Subtract/Drill Hole, Union, Intersect, Hollow Pipe), interactive parametric dimension sliders, and watertight binary STL export.
+- [x] **Phase 12 — Mobile Direct Numeric & Keypad Input**: On-screen touch numeric keypad popup with direct entry and +/- steppers.
+- [x] **Phase 13 — Viewport Ray-Casting & 3D Object Picking**: Screen-to-world unprojection, Möller-Trumbore ray-triangle intersection, and bounding box selection highlighting.
+- [x] **Phase 14 — Interactive 3D Compass Gizmo**: Orthographic viewport indicator with touch-interactive XYZ cardinal view snapping.
+- [x] **Phase 15 — Precision Direct-Touch Styling**: Touch-optimized HUD layouts, collapsed unhide button below system status bar, and horizontal scrolling.
+- [x] **Phase 16 — Multi-Selection, Cutters, & 2D Sketch Profiles**: Alpha-blended ghost pipeline for negative cutters, multi-part CSG Boolean union/subtract/grouping, 2D freehand S-Pen drawing, Catmull-Rom splines, parametric 2D shapes, and 3D bevel/chamfer extrusion.
+- [x] **Phase 17 — 3D Revolve / Lathe, Workspace Save/Load, & OBJ Export**: Radial polygon lathe generator, native `.mcad` binary workspace serialization, and multi-part Wavefront `.obj` export.
+- [x] **Phase 18 — Zero-Lag Undo / Redo History & 3D Caliper**: Bounded CPU snapshot history stack for non-blocking undo/redo, and 3D surface point-to-point caliper with vertex snapping and screen-space dimension overlay.
+- [x] **Phase 19 — STL/OBJ Mesh Importer & Studio PBR Materials**: Watertight Binary/ASCII STL and Wavefront OBJ importer with automatic millimeter scaling, mobile file scanner for `/sdcard/Download/`, 128-byte push constant packing, Studio PBR Metallic-Roughness shader pipeline, and per-part CAD material presets (Aluminum, Brass, Steel, ABS, Copper, Titanium Gunmetal, Custom).
 
 ---
 

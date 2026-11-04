@@ -16,7 +16,7 @@ class SceneSerializer
 {
    public:
     static constexpr uint32_t MCAD_MAGIC = 0x4441434D;  // 'M', 'C', 'A', 'D'
-    static constexpr uint32_t MCAD_VERSION = 1;
+    static constexpr uint32_t MCAD_VERSION = 2;
 
     template <typename SceneObjectType>
     static bool saveWorkspace(const std::string& filepath,
@@ -103,6 +103,15 @@ class SceneSerializer
                                 static_cast<uint8_t>(obj.isNegative ? 1 : 0)};
             file.write(reinterpret_cast<const char*>(flags), 2);
 
+            // Material properties (MCAD_VERSION >= 2)
+            int32_t matPreset = static_cast<int32_t>(obj.materialPreset);
+            file.write(reinterpret_cast<const char*>(&matPreset), sizeof(matPreset));
+            file.write(reinterpret_cast<const char*>(&obj.materialColor.x), sizeof(float));
+            file.write(reinterpret_cast<const char*>(&obj.materialColor.y), sizeof(float));
+            file.write(reinterpret_cast<const char*>(&obj.materialColor.z), sizeof(float));
+            file.write(reinterpret_cast<const char*>(&obj.metallic), sizeof(float));
+            file.write(reinterpret_cast<const char*>(&obj.roughness), sizeof(float));
+
             // AABB
             file.write(reinterpret_cast<const char*>(&obj.aabbMin.x), sizeof(float));
             file.write(reinterpret_cast<const char*>(&obj.aabbMin.y), sizeof(float));
@@ -163,7 +172,7 @@ class SceneSerializer
         file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
         file.read(reinterpret_cast<char*>(&version), sizeof(version));
 
-        if (magic != MCAD_MAGIC || version != MCAD_VERSION)
+        if (magic != MCAD_MAGIC || (version != 1 && version != MCAD_VERSION))
         {
             __android_log_print(ANDROID_LOG_ERROR, "MobileCAD",
                                 "SceneSerializer: Invalid MCAD file (magic=0x%08X ver=%u)", magic,
@@ -235,6 +244,26 @@ class SceneSerializer
             file.read(reinterpret_cast<char*>(flags), 2);
             obj.isSelected = (flags[0] != 0);
             obj.isNegative = (flags[1] != 0);
+
+            // Material properties (MCAD_VERSION >= 2)
+            if (version >= 2)
+            {
+                int32_t matPreset = 0;
+                file.read(reinterpret_cast<char*>(&matPreset), sizeof(matPreset));
+                obj.materialPreset = static_cast<int>(matPreset);
+                file.read(reinterpret_cast<char*>(&obj.materialColor.x), sizeof(float));
+                file.read(reinterpret_cast<char*>(&obj.materialColor.y), sizeof(float));
+                file.read(reinterpret_cast<char*>(&obj.materialColor.z), sizeof(float));
+                file.read(reinterpret_cast<char*>(&obj.metallic), sizeof(float));
+                file.read(reinterpret_cast<char*>(&obj.roughness), sizeof(float));
+            }
+            else
+            {
+                obj.materialPreset = 0;
+                obj.materialColor = {0.75f, 0.78f, 0.82f};
+                obj.metallic = 0.35f;
+                obj.roughness = 0.40f;
+            }
 
             // AABB
             file.read(reinterpret_cast<char*>(&obj.aabbMin.x), sizeof(float));
