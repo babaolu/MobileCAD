@@ -211,9 +211,13 @@ void CADApp::initRenderPass()
 
 struct PushConstantData
 {
-    utils::math::Mat4f mvp;
-    utils::math::Mat4f model;
+    utils::math::Mat4f mvp{};
+    float normalRow0[4]{1.0f, 0.0f, 0.0f, 1.0f};
+    float normalRow1[4]{0.0f, 1.0f, 0.0f, 1.0f};
+    float normalRow2[4]{0.0f, 0.0f, 1.0f, 1.0f};
+    float pbrParams[4]{0.0f, 1.0f, 0.0f, 1.0f};
 };
+static_assert(sizeof(PushConstantData) == 128, "PushConstantData must be 128 bytes");
 
 void CADApp::initPipelineLayout()
 {
@@ -3101,7 +3105,8 @@ void CADApp::renderImGui()
                     }
                 }
 
-                if (ImGui::CollapsingHeader("Material & Surface Finish"))
+                if (ImGui::CollapsingHeader("Material & Surface Finish",
+                                            ImGuiTreeNodeFlags_DefaultOpen))
                 {
                     static const char* kMaterialPresets[] = {
                         "Default (Multi-Face)", "Brushed Aluminum",  "Polished Brass / Gold",
@@ -3119,25 +3124,30 @@ void CADApp::renderImGui()
                         applyMaterialPreset(obj, currentPreset);
                     }
 
-                    if (currentPreset > 0)
+                    float col[3] = {obj.materialColor.x, obj.materialColor.y, obj.materialColor.z};
+                    if (ImGui::ColorEdit3("Part Color", col))
                     {
-                        float col[3] = {obj.materialColor.x, obj.materialColor.y,
-                                        obj.materialColor.z};
-                        if (ImGui::ColorEdit3("Part Color", col))
-                        {
-                            obj.materialColor = {col[0], col[1], col[2]};
-                            obj.materialPreset = 8;
-                        }
+                        pushUndoState();
+                        obj.materialColor = {col[0], col[1], col[2]};
+                        obj.materialPreset = 8;
                     }
 
                     if (drawNumericControl("Metallic", &obj.metallic, 0.05f, 0.0f, 1.0f, "%.2f",
-                                           [&obj]() { obj.materialPreset = 8; }))
+                                           [this, &obj]()
+                                           {
+                                               pushUndoState();
+                                               obj.materialPreset = 8;
+                                           }))
                     {
                         obj.materialPreset = 8;
                     }
 
                     if (drawNumericControl("Roughness", &obj.roughness, 0.05f, 0.04f, 1.0f, "%.2f",
-                                           [&obj]() { obj.materialPreset = 8; }))
+                                           [this, &obj]()
+                                           {
+                                               pushUndoState();
+                                               obj.materialPreset = 8;
+                                           }))
                     {
                         obj.materialPreset = 8;
                     }
@@ -4076,6 +4086,7 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
 
     float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
     utils::math::Mat4f viewProj = m_camera.getViewProjectionMatrix(aspect);
+    utils::math::Mat4f view = m_camera.getViewMatrix();
 
     // 1. Draw CAD Reference Grid and XYZ Origin Triad (LINE_LIST)
     if (m_showGrid && m_gridMesh && m_gridMesh->getVertexCount() > 0)
@@ -4084,7 +4095,8 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
         VkBuffer vertexBuffers[] = {m_gridMesh->getVertexBuffer()};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-        PushConstantData pcData{viewProj, utils::math::Mat4f::identity()};
+        PushConstantData pcData{};
+        pcData.mvp = viewProj;
         vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
                            sizeof(PushConstantData), &pcData);
         vkCmdDraw(commandBuffer, m_gridMesh->getVertexCount(), 1, 0, 0);
@@ -4097,7 +4109,8 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
         VkBuffer vertexBuffers[] = {m_sketchLineMesh->getVertexBuffer()};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-        PushConstantData pcData{viewProj, utils::math::Mat4f::identity()};
+        PushConstantData pcData{};
+        pcData.mvp = viewProj;
         vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
                            sizeof(PushConstantData), &pcData);
         vkCmdDraw(commandBuffer, m_sketchLineMesh->getVertexCount(), 1, 0, 0);
@@ -4114,20 +4127,36 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
                 continue;
 
             auto model = obj.getModelMatrix();
-            auto normalMatrix = model.inverted().transposed();
+            auto normalMatView = (view * model).inverted().transposed();
 
-            // Pack custom material RGB into normalMatrix column 3
-            normalMatrix(0, 3) = obj.materialColor.x;
-            normalMatrix(1, 3) = obj.materialColor.y;
-            normalMatrix(2, 3) = obj.materialColor.z;
+            PushConstantData pcData{};
+            pcData.mvp = viewProj * model;
 
-            // Pack PBR parameters into normalMatrix row 3
-            normalMatrix(3, 0) = obj.metallic;
-            normalMatrix(3, 1) = obj.roughness;
-            normalMatrix(3, 2) = (obj.materialPreset > 0) ? 1.0f : 0.0f;
-            normalMatrix(3, 3) = 1.0f;
+            // Row 0 of normal matrix + materialColor.r
+            pcData.normalRow0[0] = normalMatView(0, 0);
+            pcData.normalRow0[1] = normalMatView(0, 1);
+            pcData.normalRow0[2] = normalMatView(0, 2);
+            pcData.normalRow0[3] = obj.materialColor.x;
 
-            PushConstantData pcData{viewProj * model, normalMatrix};
+            // Row 1 of normal matrix + materialColor.g
+            pcData.normalRow1[0] = normalMatView(1, 0);
+            pcData.normalRow1[1] = normalMatView(1, 1);
+            pcData.normalRow1[2] = normalMatView(1, 2);
+            pcData.normalRow1[3] = obj.materialColor.y;
+
+            // Row 2 of normal matrix + materialColor.b
+            pcData.normalRow2[0] = normalMatView(2, 0);
+            pcData.normalRow2[1] = normalMatView(2, 1);
+            pcData.normalRow2[2] = normalMatView(2, 2);
+            pcData.normalRow2[3] = obj.materialColor.z;
+
+            // PBR parameters: metallic, roughness, useMaterialColor (0 = vertex colors, 1 =
+            // material preset), alpha
+            pcData.pbrParams[0] = obj.metallic;
+            pcData.pbrParams[1] = obj.roughness;
+            pcData.pbrParams[2] = (obj.materialPreset > 0) ? 1.0f : 0.0f;
+            pcData.pbrParams[3] = 1.0f;
+
             VkBuffer vertexBuffers[] = {obj.solidMesh->getVertexBuffer()};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
@@ -4156,19 +4185,32 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
                 continue;
 
             auto model = obj.getModelMatrix();
-            auto normalMatrix = model.inverted().transposed();
+            auto normalMatView = (view * model).inverted().transposed();
+
+            PushConstantData pcData{};
+            pcData.mvp = viewProj * model;
 
             // Red cutter tint
-            normalMatrix(0, 3) = 0.95f;
-            normalMatrix(1, 3) = 0.35f;
-            normalMatrix(2, 3) = 0.30f;
+            pcData.normalRow0[0] = normalMatView(0, 0);
+            pcData.normalRow0[1] = normalMatView(0, 1);
+            pcData.normalRow0[2] = normalMatView(0, 2);
+            pcData.normalRow0[3] = 0.95f;
 
-            normalMatrix(3, 0) = 0.10f;
-            normalMatrix(3, 1) = 0.60f;
-            normalMatrix(3, 2) = 1.0f;
-            normalMatrix(3, 3) = 0.38f;
+            pcData.normalRow1[0] = normalMatView(1, 0);
+            pcData.normalRow1[1] = normalMatView(1, 1);
+            pcData.normalRow1[2] = normalMatView(1, 2);
+            pcData.normalRow1[3] = 0.35f;
 
-            PushConstantData pcData{viewProj * model, normalMatrix};
+            pcData.normalRow2[0] = normalMatView(2, 0);
+            pcData.normalRow2[1] = normalMatView(2, 1);
+            pcData.normalRow2[2] = normalMatView(2, 2);
+            pcData.normalRow2[3] = 0.30f;
+
+            pcData.pbrParams[0] = 0.10f;
+            pcData.pbrParams[1] = 0.60f;
+            pcData.pbrParams[2] = 1.0f;
+            pcData.pbrParams[3] = 0.38f;
+
             VkBuffer vertexBuffers[] = {obj.solidMesh->getVertexBuffer()};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
@@ -4208,12 +4250,8 @@ void CADApp::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIn
             continue;
 
         auto model = obj.getModelMatrix();
-        auto normalMatrix = model.inverted().transposed();
-        normalMatrix(3, 0) = 0.0f;
-        normalMatrix(3, 1) = 0.5f;
-        normalMatrix(3, 2) = 0.0f;
-        normalMatrix(3, 3) = 1.0f;
-        PushConstantData pcData{viewProj * model, normalMatrix};
+        PushConstantData pcData{};
+        pcData.mvp = viewProj * model;
         VkBuffer vertexBuffers[] = {meshToDraw->getVertexBuffer()};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);

@@ -41,11 +41,7 @@ fi
 # 2. Compile Shaders
 
 echo "--- Compiling shaders ---"
-if "${SCRIPT_DIR}/compile_shaders.sh"; then
-    echo "--- Shaders compiled successfully ---"
-else
-    echo "--- Warning: Shader compilation failed or skipped, using precompiled assets/shaders ---"
-fi
+"${SCRIPT_DIR}/compile_shaders.sh"
 
 
 # 3. Native C++ Build (16 KB aligned)
@@ -99,6 +95,8 @@ cp "${MANIFEST_SRC}" staging/AndroidManifest.xml
 cp build/libmobilecad.so staging/lib/arm64-v8a/
 cp "${LIBCXX_CACHED}" staging/lib/arm64-v8a/
 cp -r assets/* staging/assets/
+mkdir -p staging/assets/shaders
+cp -f assets/shaders/*.spv staging/assets/shaders/
 cp build/mcad-tmp/dex/classes.dex staging/
 
 # 7. Package, Align, and Sign APK
