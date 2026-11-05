@@ -1,6 +1,6 @@
 #pragma once
 #include <memory>
-#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan.h>
 
 #include "VulkanContext.h"
 

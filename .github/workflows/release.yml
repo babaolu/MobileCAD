@@ -29,7 +29,7 @@ jobs:
       - name: Set up Ninja & CMake
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake zip
+          sudo apt-get install -y ninja-build cmake zip libvulkan-dev
 
       - name: Set up Android SDK & NDK
         run: |
@@ -52,6 +52,9 @@ jobs:
           if [ ! -d "external/manifold" ]; then
             git clone --depth 1 https://github.com/elalish/manifold.git external/manifold
           fi
+          if [ ! -d "external/vulkan-headers" ]; then
+            git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git external/vulkan-headers
+          fi
 
       - name: Build Native Library (16 KB Aligned libmobilecad.so)
         run: |
@@ -61,6 +64,7 @@ jobs:
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-34 \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="-I${GITHUB_WORKSPACE}/external/vulkan-headers/include" \
             -G Ninja
           ninja -C build
 

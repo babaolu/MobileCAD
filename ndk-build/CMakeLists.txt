@@ -115,6 +115,10 @@ target_include_directories(mobilecad PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../external/manifold/include
 )
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../external/vulkan-headers/include")
+    target_include_directories(mobilecad PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../external/vulkan-headers/include")
+endif()
+
 
 # Then add Vulkan include paths with explicit ordering:
 # 1) NDK sysroot's C++ bindings (must come first)

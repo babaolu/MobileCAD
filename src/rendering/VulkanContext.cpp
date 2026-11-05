@@ -2,8 +2,7 @@
 
 #include <android/native_window.h>
 
-// Manually define Android surface types since vulkan.hpp uses VULKAN_H_ guard
-// and can't be combined with vulkan_android.h after it.
+// Define Android surface types for dynamic loader dispatch
 #ifndef VK_KHR_ANDROID_SURFACE_EXTENSION_NAME
 #define VK_KHR_ANDROID_SURFACE_EXTENSION_NAME "VK_KHR_android_surface"
 #endif
@@ -223,7 +222,7 @@ void VulkanContext::createSurface(ANativeWindow* window)
     createInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
     createInfo.window = window;
 
-    // Load vkCreateAndroidSurfaceKHR at runtime since vulkan.hpp doesn't expose it
+    // Load vkCreateAndroidSurfaceKHR dynamically from instance
     using PFN_CreateAndroidSurface = VkResult (*)(VkInstance, const AndroidSurfaceCreateInfo*,
                                                   const VkAllocationCallbacks*, VkSurfaceKHR*);
     auto func = reinterpret_cast<PFN_CreateAndroidSurface>(
