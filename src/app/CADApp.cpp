@@ -3260,7 +3260,7 @@ void CADApp::renderHelpWindow()
 
     // Header & Quick Close Button
     ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
-                       "MobileCAD Studio v1.1.0 - In-App User Guide");
+                       "MobileCAD Studio v1.2.0 - In-App User Guide");
     ImGui::SameLine();
     float closeBtnW = 105.0f;
     float rightEdge = ImGui::GetWindowContentRegionMax().x;

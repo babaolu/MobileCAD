@@ -18,7 +18,7 @@ The entire engineering toolchain is self-hosting: configured, compiled, packaged
 
 Get the latest pre-compiled, 16 KB page-aligned, and signed release APK:
 
-[![Download APK](https://img.shields.io/badge/Download%20APK-v1.0.0%20(ARM64)-brightgreen?style=for-the-badge&logo=android)](https://github.com/babaolu/MobileCAD/releases/latest)
+[![Download APK](https://img.shields.io/badge/Download%20APK-v1.2.0%20(ARM64)-brightgreen?style=for-the-badge&logo=android)](https://github.com/babaolu/MobileCAD/releases/latest)
 
 - **Latest Release Page**: [https://github.com/babaolu/MobileCAD/releases/latest](https://github.com/babaolu/MobileCAD/releases/latest)
 - **Direct APK Download**: [`MobileCAD-arm64-v8a.apk`](https://github.com/babaolu/MobileCAD/releases/latest/download/MobileCAD-arm64-v8a.apk)
@@ -40,7 +40,7 @@ adb shell "am start -n com.mobilecad/android.app.NativeActivity"
 | **GPU & Vulkan Driver** | **Hardware Vulkan 1.1 / 1.3 / 1.4 Driver** with SPIR-V 1.3 support and `VK_FORMAT_D32_SFLOAT` hardware depth buffering.<br>*Supported GPUs include:* Qualcomm Adreno 600/700/800 series, ARM Mali-G76/G78/Immortalis series, Samsung Xclipse (AMD RDNA2/3). |
 | **Display & Refresh Rate** | Capacitive multi-touch screen supporting **60Hz, 90Hz, or 120Hz** locked frame cadence via Vulkan FIFO presentation mode (`VK_PRESENT_MODE_FIFO_KHR`). |
 | **Stylus Support** | Full native support for **Samsung S-Pen** and active styluses (pressure-free hover, sub-millimeter 2D freehand/spline drawing, and 3D surface picking). Standard touch is fully supported. |
-| **File Storage Access** | Standard POSIX read/write access to `/sdcard/Download/` for CAD file exchange (`.mcad` projects, `.stl` meshes, and `.obj` exports), with automatic fallback to app-private internal storage (`/data/user/0/com.mobilecad/files/`). |
+| **File Storage Access** | Standard POSIX read/write access to `/sdcard/Download/` for CAD file exchange (`.mcad` / `.mcadx` projects, `.stl` meshes, `.obj` models, ISO 10303-21 `.step` solids, and AutoCAD `.dxf` drawings), with automatic fallback to app-private internal storage (`/data/user/0/com.mobilecad/files/`). |
 
 ---
 
@@ -140,6 +140,8 @@ MobileCAD/
 │   ├── geometry/
 │   │   └── Primitives.h             # 3D CAD Primitives, CSG, Splines, Wireframes, Revolve
 │   ├── io/
+│   │   ├── StepExporter.h           # ISO 10303-21 STEP AP214 B-Rep solid/surface exporter
+│   │   ├── ArchFormat.h             # .mcadx Super-Format container & AutoCAD .dxf dual exporter
 │   │   ├── MeshImporter.h           # Watertight Binary/ASCII STL & Wavefront OBJ importer
 │   │   ├── MeshExporter.h           # Binary STL and multi-part Wavefront OBJ exporter
 │   │   └── SceneSerializer.h        # Binary .mcad workspace serializer (v2 with PBR materials)
@@ -210,6 +212,37 @@ MobileCAD: onWindowResized: rebuild complete swap=1080x2316
 
 ---
 
+---
+
+## New in v1.2.0: ISO STEP, Architectural BIM Studio & .mcadx / .dxf Formats
+
+### 1. Custom Touch QWERTY Project & File Naming
+- **On-Screen Touch Keyboard Modal (`renderKeyboardPopup`)**: Integrated touch-friendly 4-row QWERTY keyboard with `[ CAPS / Shift ]`, `0-9`, `a-z`, `-`, `_`, backspace, and clear buttons.
+- **Filename Sanitization**: Automatically validates and sanitizes input strings to filesystem-safe alphanumeric characters.
+- **Unified Across All Exporters**: Renaming the project instantly updates the filenames for all export targets: STL, OBJ, STEP, DXF, MCAD, and MCADX in `/sdcard/Download/`.
+
+### 2. Native ISO 10303-21 STEP AP214 B-Rep Solid Exporter (`.step`)
+- **Topological B-Rep Modeling**: Exports true solid representations (`MANIFOLD_SOLID_BREP`) compliant with the `AUTOMOTIVE_DESIGN` AP214 schema.
+- **Exact Geometry**: Generates `CLOSED_SHELL` containing `ADVANCED_FACE` entities with exact `AXIS2_PLACEMENT_3D` plane normals and `SI_UNIT(.MILLI.,.METRE.)` millimeter scaling.
+- **Embedded Surface Styling**: Injects `COLOUR_RGB` styling entities directly derived from Cook-Torrance PBR surface properties.
+- **CAD Interoperability**: Seamlessly imports into FreeCAD, SolidWorks, Autodesk Fusion, Rhino, and CATIA.
+
+### 3. Architectural BIM & Floorplan Studio
+- **Parametric Architectural Elements**:
+  - `ArchWall`: Solid concrete/masonry wall segment with customizable length, thickness, and height.
+  - `ArchDoor`: Wall with framed doorway opening, jambs, header, and 90° swinging door leaf on `A-DOOR` layer.
+  - `ArchWindow`: Wall with centered aperture, timber sill, surround framing, and glass pane on `A-WIND` layer.
+  - `ArchStair`: Watertight solid staircase prism with customizable step count, total rise, total run, and tread width on `A-STAIR` layer.
+  - `ArchRoof`: Pitched gabled roof prism with customizable width, length, ridge height, and eave overhangs on `A-ROOF` layer.
+- **2D Continuous Wall Chain Tool**: Tap ground sequentially ($P_0 \to P_1 \to P_2$) to dynamically project ray-ground intersections ($Y=0$) and generate connected 3D wall segments with automatic length and angle calculations. Includes `[ Close Wall Loop ]` for watertight floorplan enclosures.
+- **2D Blueprint Plan View Overlay**: Snaps the camera to an orthographic top-down viewpoint and renders dynamic 2D vector dimensions, 90° door swing arcs, and CAD layer badges directly onto the viewport canvas.
+
+### 4. Extended Super-Format Container (`.mcadx`) & AutoCAD DXF (`.dxf`)
+- **`.mcadx` Super-Format Container**: Next-generation binary CAD container format featuring the `MCADX100` magic header, 16-byte chunk alignment, and IEEE 802.3 CRC32 data integrity verification. Stores project metadata, camera state, layer mappings, architectural BIM properties, Cook-Torrance PBR materials, and GPU mesh geometry.
+- **AutoCAD DXF Exporter (`.dxf`)**: Standards-compliant AutoCAD 2000 (`AC1015`) dual-format exporter outputting full 3D mesh geometry (`3DFACE`) alongside projected 2D floorplan vectors (`LINE`, `ARC`, `TEXT` dimension annotations) organized across industry-standard CAD layers (`A-WALL`, `A-DOOR`, `A-WIND`, `A-STAIR`, `A-ROOF`, `A-DIMS`, `3D-MESH`).
+
+---
+
 ## Development Roadmap
 
 - [x] **Phase 0 — Toolchain Foundation**: On-device ARM64 Clang/CMake/Ninja build system in Termux.
@@ -230,7 +263,12 @@ MobileCAD: onWindowResized: rebuild complete swap=1080x2316
 - [x] **Phase 16 — Multi-Selection, Cutters, & 2D Sketch Profiles**: Alpha-blended ghost pipeline for negative cutters, multi-part CSG Boolean union/subtract/grouping, 2D freehand S-Pen drawing, Catmull-Rom splines, parametric 2D shapes, and 3D bevel/chamfer extrusion.
 - [x] **Phase 17 — 3D Revolve / Lathe, Workspace Save/Load, & OBJ Export**: Radial polygon lathe generator, native `.mcad` binary workspace serialization, and multi-part Wavefront `.obj` export.
 - [x] **Phase 18 — Zero-Lag Undo / Redo History & 3D Caliper**: Bounded CPU snapshot history stack for non-blocking undo/redo, and 3D surface point-to-point caliper with vertex snapping and screen-space dimension overlay.
-- [x] **Phase 19 — STL/OBJ Mesh Importer & Studio PBR Materials**: Watertight Binary/ASCII STL and Wavefront OBJ importer with automatic millimeter scaling, mobile file scanner for `/sdcard/Download/`, 128-byte push constant packing, Studio PBR Metallic-Roughness shader pipeline, and per-part CAD material presets (Aluminum, Brass, Steel, ABS, Copper, Titanium Gunmetal, Custom).
+- [x] **Phase 19 — STL/OBJ Mesh Importer & Studio PBR Materials**: Watertight Binary/ASCII STL and Wavefront OBJ importer with automatic millimeter scaling, mobile file scanner for `/sdcard/Download/`, 128-byte push constant packing, Studio PBR Metallic-Roughness shader pipeline, and per-part CAD material presets.
+- [x] **Phase 20 — Multi-Face PBR Materials & Precision Numpad**: Individual face selection/picking, per-face Cook-Torrance material assignments, and precision numpad direct keypad input.
+- [x] **Phase 21 — In-App User Guide**: Comprehensive multi-category in-app reference guide with quick close and category navigation.
+- [x] **Phase 22 — CI/CD Automation & GitHub Release Packaging**: Automated GitHub Actions workflow with NDK r26, standalone Android build tools, and automated release asset bundling.
+- [x] **Phase 23 — Architectural BIM Studio, ISO STEP Exporter, & .mcadx / .dxf Formats**: Parametric BIM primitives, continuous wall drawing, 2D Blueprint Plan View, native ISO 10303-21 STEP AP214 exporter, AutoCAD DXF dual exporter, and `.mcadx` Super-Format container with CRC32.
+- [x] **Phase 24 — v1.2.0 Release Packaging & Documentation**: Version bump to `v1.2.0`, comprehensive documentation, and signed release APK publishing.
 
 ---
 
