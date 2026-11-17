@@ -589,6 +589,33 @@ void CADApp::rebuildObjectGeometry(size_t index)
                 obj.sketchPoints, obj.params.revolveAngle, obj.params.revolveSegments,
                 obj.params.revolveOffset, &obj.localManifold);
             break;
+        case PrimitiveType::ArchWall:
+            data = geometry::Primitives::createArchWall(obj.params.wallLength,
+                                                        obj.params.wallThickness,
+                                                        obj.params.wallHeight, &obj.localManifold);
+            break;
+        case PrimitiveType::ArchDoor:
+            data = geometry::Primitives::createArchWallWithDoor(
+                obj.params.wallLength, obj.params.wallThickness, obj.params.wallHeight,
+                obj.params.doorWidth, obj.params.doorHeight, obj.params.doorSwingAngle,
+                &obj.localManifold);
+            break;
+        case PrimitiveType::ArchWindow:
+            data = geometry::Primitives::createArchWallWithWindow(
+                obj.params.wallLength, obj.params.wallThickness, obj.params.wallHeight,
+                obj.params.windowWidth, obj.params.windowHeight, obj.params.windowSillHeight,
+                &obj.localManifold);
+            break;
+        case PrimitiveType::ArchStair:
+            data = geometry::Primitives::createArchStaircase(
+                obj.params.stairSteps, obj.params.stairRise, obj.params.stairRun,
+                obj.params.stairWidth, &obj.localManifold);
+            break;
+        case PrimitiveType::ArchRoof:
+            data = geometry::Primitives::createArchRoof(
+                obj.params.roofWidth, obj.params.roofLength, obj.params.roofRidgeHeight,
+                obj.params.roofOverhang, &obj.localManifold);
+            break;
         }
     }
     else if (obj.params.csgMode == 1)
@@ -1402,7 +1429,9 @@ bool CADApp::exportSTL()
     }
 
     uint32_t triCount = static_cast<uint32_t>(combinedIndices.size() / 3);
-    const std::string downloadPath = "/sdcard/Download/mobilecad_part.stl";
+    const std::string downloadPath = std::string("/sdcard/Download/") + m_customFileName + ".stl";
+    const std::string internalPath =
+        std::string("/data/data/com.mobilecad/files/") + m_customFileName + ".stl";
 
     std::remove(downloadPath.c_str());
     bool ok = io::MeshExporter::exportBinarySTL(downloadPath, combinedVertices, combinedIndices);
@@ -1417,22 +1446,22 @@ bool CADApp::exportSTL()
     }
 
     LOGI("Primary export to %s failed, falling back to internal storage: %s", downloadPath.c_str(),
-         m_exportPath.c_str());
+         internalPath.c_str());
 
-    std::remove(m_exportPath.c_str());
-    ok = io::MeshExporter::exportBinarySTL(m_exportPath, combinedVertices, combinedIndices);
+    std::remove(internalPath.c_str());
+    ok = io::MeshExporter::exportBinarySTL(internalPath, combinedVertices, combinedIndices);
     if (ok)
     {
         char buf[256];
         snprintf(buf, sizeof(buf), "Exported %u tris (%zu parts) -> %s", triCount, m_objects.size(),
-                 m_exportPath.c_str());
+                 internalPath.c_str());
         m_exportStatus = buf;
         LOGI("%s", buf);
         return true;
     }
 
     m_exportStatus = "Export failed (check permissions)";
-    LOGE("Failed to export STL to both %s and %s", downloadPath.c_str(), m_exportPath.c_str());
+    LOGE("Failed to export STL to both %s and %s", downloadPath.c_str(), internalPath.c_str());
     return false;
 }
 
@@ -1488,8 +1517,9 @@ bool CADApp::exportOBJ()
         return false;
     }
 
-    const std::string downloadPath = "/sdcard/Download/mobilecad_part.obj";
-    const std::string internalPath = "/data/data/com.mobilecad/files/part_export.obj";
+    const std::string downloadPath = std::string("/sdcard/Download/") + m_customFileName + ".obj";
+    const std::string internalPath =
+        std::string("/data/data/com.mobilecad/files/") + m_customFileName + ".obj";
 
     std::remove(downloadPath.c_str());
     bool ok = io::MeshExporter::exportWavefrontOBJ(downloadPath, parts);
@@ -1523,6 +1553,90 @@ bool CADApp::exportOBJ()
     return false;
 }
 
+bool CADApp::exportSTEP()
+{
+    if (m_objects.empty())
+    {
+        m_exportStatus = "Export error: No objects in scene";
+        return false;
+    }
+
+    const std::string downloadPath = std::string("/sdcard/Download/") + m_customFileName + ".step";
+    const std::string internalPath =
+        std::string("/data/data/com.mobilecad/files/") + m_customFileName + ".step";
+
+    std::remove(downloadPath.c_str());
+    bool ok = io::StepExporter::exportSTEP(downloadPath, m_objects, m_customFileName);
+    if (ok)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Exported ISO STEP -> %s", downloadPath.c_str());
+        m_exportStatus = buf;
+        LOGI("%s", buf);
+        return true;
+    }
+
+    LOGI("Primary STEP export to %s failed, falling back to internal storage: %s",
+         downloadPath.c_str(), internalPath.c_str());
+
+    std::remove(internalPath.c_str());
+    ok = io::StepExporter::exportSTEP(internalPath, m_objects, m_customFileName);
+    if (ok)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Exported ISO STEP -> %s", internalPath.c_str());
+        m_exportStatus = buf;
+        LOGI("%s", buf);
+        return true;
+    }
+
+    m_exportStatus = "STEP export failed (check permissions)";
+    LOGE("Failed to export STEP to both %s and %s", downloadPath.c_str(), internalPath.c_str());
+    return false;
+}
+
+bool CADApp::exportDXF()
+{
+    if (m_objects.empty())
+    {
+        m_exportStatus = "Export error: No objects in scene";
+        return false;
+    }
+
+    const std::string downloadPath = std::string("/sdcard/Download/") + m_customFileName + ".dxf";
+    const std::string internalPath =
+        std::string("/data/data/com.mobilecad/files/") + m_customFileName + ".dxf";
+
+    std::remove(downloadPath.c_str());
+    bool ok = io::ArchFormat::exportDXF(downloadPath, m_objects, m_customFileName);
+    if (ok)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Exported AutoCAD DXF -> %s", downloadPath.c_str());
+        m_exportStatus = buf;
+        LOGI("%s", buf);
+        return true;
+    }
+
+    LOGI("Primary DXF export to %s failed, falling back to internal storage: %s",
+         downloadPath.c_str(), internalPath.c_str());
+
+    std::remove(internalPath.c_str());
+    ok = io::ArchFormat::exportDXF(internalPath, m_objects, m_customFileName);
+    if (ok)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Exported AutoCAD DXF -> %s", internalPath.c_str());
+        m_exportStatus = buf;
+        LOGI("%s", buf);
+        return true;
+    }
+
+    m_exportStatus = "DXF export failed (check permissions)";
+    LOGE("Failed to export DXF to both %s and %s", downloadPath.c_str(), internalPath.c_str());
+    return false;
+}
+
 bool CADApp::saveWorkspace()
 {
     if (m_objects.empty())
@@ -1531,8 +1645,9 @@ bool CADApp::saveWorkspace()
         return false;
     }
 
-    const std::string downloadPath = "/sdcard/Download/mobilecad_workspace.mcad";
-    const std::string internalPath = "/data/data/com.mobilecad/files/workspace.mcad";
+    const std::string downloadPath = std::string("/sdcard/Download/") + m_customFileName + ".mcad";
+    const std::string internalPath =
+        std::string("/data/data/com.mobilecad/files/") + m_customFileName + ".mcad";
 
     std::remove(downloadPath.c_str());
     bool ok = io::SceneSerializer::saveWorkspace(downloadPath, m_objects);
@@ -1564,30 +1679,22 @@ bool CADApp::saveWorkspace()
     return false;
 }
 
-bool CADApp::loadWorkspace()
+bool CADApp::loadWorkspaceFile(const std::string& filepath)
 {
     if (!m_vkContext)
         return false;
 
-    const std::string downloadPath = "/sdcard/Download/mobilecad_workspace.mcad";
-    const std::string internalPath = "/data/data/com.mobilecad/files/workspace.mcad";
-
-    std::vector<SceneObject> loadedObjects;
-    bool ok = io::SceneSerializer::loadWorkspace(downloadPath, loadedObjects);
-    std::string loadedFrom = downloadPath;
-    if (!ok)
+    if (!std::filesystem::exists(filepath))
     {
-        LOGI("Primary load from %s failed, attempting fallback: %s", downloadPath.c_str(),
-             internalPath.c_str());
-        ok = io::SceneSerializer::loadWorkspace(internalPath, loadedObjects);
-        loadedFrom = internalPath;
+        m_projectStatus = "Load failed: File not found";
+        return false;
     }
 
+    std::vector<SceneObject> loadedObjects;
+    bool ok = io::SceneSerializer::loadWorkspace(filepath, loadedObjects);
     if (!ok)
     {
-        m_projectStatus = "Load failed: Cannot find .mcad file";
-        LOGE("Failed to load workspace from both %s and %s", downloadPath.c_str(),
-             internalPath.c_str());
+        m_projectStatus = "Load failed: Cannot parse .mcad file";
         return false;
     }
 
@@ -1602,11 +1709,140 @@ bool CADApp::loadWorkspace()
         rebuildObjectGeometry(i);
     }
 
+    std::string stem = std::filesystem::path(filepath).stem().string();
+    if (!stem.empty())
+    {
+        setCustomFileName(stem.c_str());
+    }
+
     char buf[256];
-    snprintf(buf, sizeof(buf), "Loaded %zu parts <- %s", m_objects.size(), loadedFrom.c_str());
+    snprintf(buf, sizeof(buf), "Loaded %zu parts <- %s", m_objects.size(), filepath.c_str());
     m_projectStatus = buf;
     LOGI("%s", buf);
     return true;
+}
+
+bool CADApp::loadWorkspace()
+{
+    const std::string downloadPath = std::string("/sdcard/Download/") + m_customFileName + ".mcad";
+    const std::string internalPath =
+        std::string("/data/data/com.mobilecad/files/") + m_customFileName + ".mcad";
+
+    if (loadWorkspaceFile(downloadPath))
+        return true;
+
+    LOGI("Primary load from %s failed, attempting fallback: %s", downloadPath.c_str(),
+         internalPath.c_str());
+    return loadWorkspaceFile(internalPath);
+}
+
+bool CADApp::saveMCADX()
+{
+    if (m_objects.empty())
+    {
+        m_projectStatus = "Save error: Scene is empty";
+        return false;
+    }
+
+    const std::string downloadPath = std::string("/sdcard/Download/") + m_customFileName + ".mcadx";
+    const std::string internalPath =
+        std::string("/data/data/com.mobilecad/files/") + m_customFileName + ".mcadx";
+
+    std::remove(downloadPath.c_str());
+    bool ok = io::ArchFormat::saveMCADX(downloadPath, m_objects, m_customFileName, "MobileCAD User",
+                                        m_camera);
+    if (ok)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Saved %zu BIM parts -> %s", m_objects.size(),
+                 downloadPath.c_str());
+        m_projectStatus = buf;
+        LOGI("%s", buf);
+        return true;
+    }
+
+    LOGI("Primary save to %s failed, falling back to internal storage: %s", downloadPath.c_str(),
+         internalPath.c_str());
+
+    std::remove(internalPath.c_str());
+    ok = io::ArchFormat::saveMCADX(internalPath, m_objects, m_customFileName, "MobileCAD User",
+                                   m_camera);
+    if (ok)
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "Saved %zu BIM parts -> %s", m_objects.size(),
+                 internalPath.c_str());
+        m_projectStatus = buf;
+        LOGI("%s", buf);
+        return true;
+    }
+
+    m_projectStatus = "MCADX Save failed (check permissions)";
+    LOGE("Failed to save .mcadx to both %s and %s", downloadPath.c_str(), internalPath.c_str());
+    return false;
+}
+
+bool CADApp::loadMCADXFile(const std::string& filepath)
+{
+    if (!m_vkContext)
+        return false;
+
+    if (!std::filesystem::exists(filepath))
+    {
+        m_projectStatus = "Load failed: File not found";
+        return false;
+    }
+
+    std::vector<SceneObject> loadedObjects;
+    std::string projName;
+    bool ok = io::ArchFormat::loadMCADX(filepath, loadedObjects, m_camera, &projName);
+    if (!ok)
+    {
+        m_projectStatus = "Load failed: Invalid .mcadx container";
+        return false;
+    }
+
+    if (!projName.empty())
+    {
+        setCustomFileName(projName.c_str());
+    }
+    else
+    {
+        std::string stem = std::filesystem::path(filepath).stem().string();
+        if (!stem.empty())
+            setCustomFileName(stem.c_str());
+    }
+
+    auto device = m_vkContext->getDevice();
+    vkDeviceWaitIdle(device);
+
+    m_objects = std::move(loadedObjects);
+    m_selectedIndex = m_objects.empty() ? -1 : 0;
+
+    for (size_t i = 0; i < m_objects.size(); ++i)
+    {
+        rebuildObjectGeometry(i);
+    }
+
+    char buf[256];
+    snprintf(buf, sizeof(buf), "Loaded %zu BIM parts <- %s", m_objects.size(), filepath.c_str());
+    m_projectStatus = buf;
+    LOGI("%s", buf);
+    return true;
+}
+
+bool CADApp::loadMCADX()
+{
+    const std::string downloadPath = std::string("/sdcard/Download/") + m_customFileName + ".mcadx";
+    const std::string internalPath =
+        std::string("/data/data/com.mobilecad/files/") + m_customFileName + ".mcadx";
+
+    if (loadMCADXFile(downloadPath))
+        return true;
+
+    LOGI("Primary MCADX load from %s failed, attempting fallback: %s", downloadPath.c_str(),
+         internalPath.c_str());
+    return loadMCADXFile(internalPath);
 }
 
 bool CADApp::importMeshFile(const std::string& filepath)
@@ -1753,7 +1989,7 @@ void CADApp::refreshDiscoveredFiles()
                     {
                         std::string ext = entry.path().extension().string();
                         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                        if (ext == ".stl" || ext == ".obj")
+                        if (ext == ".stl" || ext == ".obj" || ext == ".mcad" || ext == ".mcadx")
                         {
                             m_discoveredMeshFiles.push_back(entry.path().string());
                         }
@@ -1772,11 +2008,12 @@ void CADApp::refreshDiscoveredFiles()
 
     if (!m_discoveredMeshFiles.empty())
     {
-        m_importStatus = "Found " + std::to_string(m_discoveredMeshFiles.size()) + " mesh file(s)";
+        m_importStatus =
+            "Found " + std::to_string(m_discoveredMeshFiles.size()) + " CAD / mesh file(s)";
     }
     else
     {
-        m_importStatus = "No .stl or .obj files found in /sdcard/Download/";
+        m_importStatus = "No .mcad, .mcadx, .stl, or .obj files found in /sdcard/Download/";
     }
     LOGI("%s", m_importStatus.c_str());
 }
@@ -2385,6 +2622,422 @@ void CADApp::renderNumpadPopup()
     }
 }
 
+void CADApp::setCustomFileName(const char* name)
+{
+    if (!name || name[0] == '\0')
+    {
+        strncpy(m_customFileName, "my_cad_project", sizeof(m_customFileName) - 1);
+        m_customFileName[sizeof(m_customFileName) - 1] = '\0';
+        return;
+    }
+
+    std::string sanitized;
+    sanitized.reserve(strlen(name));
+    for (const char* p = name; *p != '\0'; ++p)
+    {
+        char c = *p;
+        if (c == ' ' || c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' ||
+            c == '<' || c == '>' || c == '|')
+        {
+            sanitized += '_';
+        }
+        else
+        {
+            sanitized += c;
+        }
+    }
+    if (sanitized.empty())
+        sanitized = "my_cad_project";
+
+    strncpy(m_customFileName, sanitized.c_str(), sizeof(m_customFileName) - 1);
+    m_customFileName[sizeof(m_customFileName) - 1] = '\0';
+}
+
+void CADApp::openKeyboardPopup()
+{
+    m_keyboardBuffer = m_customFileName;
+    m_keyboardNeedOpen = true;
+    m_showKeyboardPopup = true;
+}
+
+void CADApp::renderKeyboardPopup()
+{
+    if (m_keyboardNeedOpen)
+    {
+        ImGui::OpenPopup("Enter Project / File Name");
+        m_keyboardNeedOpen = false;
+    }
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("Enter Project / File Name", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::Text("Enter Project / Export File Name:");
+        ImGui::Separator();
+
+        // Large display box showing current typed input string
+        ImGui::BeginChild("KeyboardDisplay", ImVec2(480.0f, 44.0f), true,
+                          ImGuiWindowFlags_NoScrollbar);
+        ImGui::SetWindowFontScale(1.3f);
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "%s",
+                           m_keyboardBuffer.empty() ? "_" : m_keyboardBuffer.c_str());
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::EndChild();
+
+        ImGui::Spacing();
+
+        float keyW = 42.0f;
+        float keyH = 46.0f;
+        ImVec2 keySize(keyW, keyH);
+
+        auto appendChar = [&](char c)
+        {
+            if (m_keyboardBuffer.size() < 64)
+            {
+                m_keyboardBuffer += c;
+            }
+        };
+
+        // Row 1: Numbers 1-0
+        const char row1[] = "1234567890";
+        for (int i = 0; i < 10; ++i)
+        {
+            if (i > 0)
+                ImGui::SameLine();
+            char label[2] = {row1[i], '\0'};
+            if (ImGui::Button(label, keySize))
+                appendChar(row1[i]);
+        }
+
+        // Row 2: QWERTYUIOP
+        const char* row2Lower = "qwertyuiop";
+        const char* row2Upper = "QWERTYUIOP";
+        const char* row2 = m_keyboardShift ? row2Upper : row2Lower;
+        for (int i = 0; i < 10; ++i)
+        {
+            if (i > 0)
+                ImGui::SameLine();
+            char label[2] = {row2[i], '\0'};
+            if (ImGui::Button(label, keySize))
+                appendChar(row2[i]);
+        }
+
+        // Row 3: ASDFGHJKL_
+        const char* row3Lower = "asdfghjkl_";
+        const char* row3Upper = "ASDFGHJKL_";
+        const char* row3 = m_keyboardShift ? row3Upper : row3Lower;
+        for (int i = 0; i < 10; ++i)
+        {
+            if (i > 0)
+                ImGui::SameLine();
+            char label[2] = {row3[i], '\0'};
+            if (ImGui::Button(label, keySize))
+                appendChar(row3[i]);
+        }
+
+        // Row 4: SHIFT, ZXCVBNM-, Backspace
+        if (m_keyboardShift)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.55f, 0.90f, 1.0f));
+        }
+        if (ImGui::Button(m_keyboardShift ? "CAPS" : "shift", ImVec2(56.0f, keyH)))
+        {
+            m_keyboardShift = !m_keyboardShift;
+        }
+        if (m_keyboardShift)
+        {
+            ImGui::PopStyleColor();
+        }
+
+        const char* row4Lower = "zxcvbnm-";
+        const char* row4Upper = "ZXCVBNM-";
+        const char* row4 = m_keyboardShift ? row4Upper : row4Lower;
+        for (int i = 0; i < 8; ++i)
+        {
+            ImGui::SameLine();
+            char label[2] = {row4[i], '\0'};
+            if (ImGui::Button(label, keySize))
+                appendChar(row4[i]);
+        }
+
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.25f, 0.25f, 1.0f));
+        if (ImGui::Button("<-", ImVec2(56.0f, keyH)))
+        {
+            if (!m_keyboardBuffer.empty())
+                m_keyboardBuffer.pop_back();
+        }
+        ImGui::PopStyleColor();
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        // Action Buttons: Clear, Cancel, Apply Name
+        if (ImGui::Button("Clear", ImVec2(90.0f, 42.0f)))
+        {
+            m_keyboardBuffer.clear();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(90.0f, 42.0f)))
+        {
+            m_showKeyboardPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.58f, 0.28f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.70f, 0.35f, 1.0f));
+        if (ImGui::Button("Apply Name", ImVec2(160.0f, 42.0f)))
+        {
+            setCustomFileName(m_keyboardBuffer.c_str());
+            m_showKeyboardPopup = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopStyleColor(2);
+
+        ImGui::EndPopup();
+    }
+    else
+    {
+        m_showKeyboardPopup = false;
+    }
+}
+
+void CADApp::addWallChainPoint(const utils::math::Vec3f& pt)
+{
+    if (m_wallChainPoints.empty())
+    {
+        m_wallChainPoints.push_back(pt);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "Wall Chain started at (%.2f, %.2f)", pt.x, pt.z);
+        m_projectStatus = buf;
+        LOGI("%s", buf);
+        return;
+    }
+
+    utils::math::Vec3f p0 = m_wallChainPoints.back();
+    utils::math::Vec3f p1 = pt;
+
+    float dx = p1.x - p0.x;
+    float dz = p1.z - p0.z;
+    float spanLen = std::hypot(dx, dz);
+
+    if (spanLen < 0.20f)
+    {
+        return;  // Too small to spawn wall segment
+    }
+
+    pushUndoState();
+
+    utils::math::Vec3f mid = (p0 + p1) * 0.5f;
+    // Angle in degrees in X-Z plane
+    float angleRad = std::atan2(-dz, dx);
+    float angleDeg = angleRad * 180.0f / 3.14159265358979323846f;
+
+    for (auto& o : m_objects)
+    {
+        o.isSelected = false;
+    }
+
+    SceneObject newObj;
+    newObj.name = "Wall_" + std::to_string(m_objects.size() + 1);
+    newObj.primitiveType = PrimitiveType::ArchWall;
+    newObj.position = {mid.x, 0.0f, mid.z};
+    newObj.rotationDeg = {0.0f, angleDeg, 0.0f};
+    newObj.scale = {1.0f, 1.0f, 1.0f};
+    newObj.isSelected = true;
+    newObj.isNegative = false;
+    newObj.materialPreset = 0;
+    newObj.materialColor = {0.84f, 0.83f, 0.80f};  // Masonry
+    newObj.metallic = 0.10f;
+    newObj.roughness = 0.80f;
+
+    newObj.params.wallLength = spanLen;
+    newObj.params.wallThickness = m_archWallThickness;
+    newObj.params.wallHeight = m_archWallHeight;
+    newObj.params.bimLayer = "A-WALL";
+
+    m_objects.push_back(std::move(newObj));
+    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+
+    m_wallChainPoints.push_back(pt);
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "Wall spawned: L=%.2f m, T=%.2f m, H=%.2f m", spanLen,
+             m_archWallThickness, m_archWallHeight);
+    m_projectStatus = buf;
+    LOGI("%s", buf);
+}
+
+void CADApp::closeWallLoop()
+{
+    if (m_wallChainPoints.size() >= 3)
+    {
+        addWallChainPoint(m_wallChainPoints.front());
+    }
+}
+
+void CADApp::renderArchBlueprintOverlay()
+{
+    if (!m_archBlueprintMode)
+        return;
+
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+    if (!drawList)
+        return;
+
+    float screenW = static_cast<float>(getSwapchainExtentW());
+    float screenH = static_cast<float>(getSwapchainExtentH());
+    if (screenW <= 10.0f || screenH <= 10.0f)
+        return;
+
+    float aspect = screenW / screenH;
+    auto viewProj = m_camera.getViewProjectionMatrix(aspect);
+
+    auto projectToScreen = [&](const utils::math::Vec3f& worldPt) -> ImVec2
+    {
+        float x = viewProj(0, 0) * worldPt.x + viewProj(0, 1) * worldPt.y +
+                  viewProj(0, 2) * worldPt.z + viewProj(0, 3);
+        float y = viewProj(1, 0) * worldPt.x + viewProj(1, 1) * worldPt.y +
+                  viewProj(1, 2) * worldPt.z + viewProj(1, 3);
+        float w = viewProj(3, 0) * worldPt.x + viewProj(3, 1) * worldPt.y +
+                  viewProj(3, 2) * worldPt.z + viewProj(3, 3);
+        if (w <= 0.001f)
+            w = 0.001f;
+        float ndcX = x / w;
+        float ndcY = y / w;
+        float sx = (ndcX * 0.5f + 0.5f) * screenW;
+        float sy = (-ndcY * 0.5f + 0.5f) * screenH;
+        return ImVec2(sx, sy);
+    };
+
+    // Draw active wall chain points and lines in yellow
+    if (m_archWallDrawMode && m_wallChainPoints.size() > 0)
+    {
+        for (size_t i = 0; i < m_wallChainPoints.size(); ++i)
+        {
+            ImVec2 scr = projectToScreen(m_wallChainPoints[i]);
+            drawList->AddCircleFilled(scr, 5.0f, IM_COL32(255, 220, 40, 255));
+            if (i + 1 < m_wallChainPoints.size())
+            {
+                ImVec2 nextScr = projectToScreen(m_wallChainPoints[i + 1]);
+                drawList->AddLine(scr, nextScr, IM_COL32(255, 220, 40, 200), 2.0f);
+            }
+        }
+    }
+
+    // Draw architectural floorplan overlay for scene objects
+    for (const auto& obj : m_objects)
+    {
+        if (obj.isNegative)
+            continue;
+
+        auto model = obj.getModelMatrix();
+
+        float len = obj.params.wallLength;
+        float thick = obj.params.wallThickness;
+        if (len <= 0.01f)
+            len = obj.params.width;
+        if (thick <= 0.01f)
+            thick = obj.params.depth;
+
+        float hw = len * 0.5f;
+        float ht = thick * 0.5f;
+
+        utils::math::Vec3f c0 = model * utils::math::Vec3f{-hw, 0.01f, -ht};
+        utils::math::Vec3f c1 = model * utils::math::Vec3f{hw, 0.01f, -ht};
+        utils::math::Vec3f c2 = model * utils::math::Vec3f{hw, 0.01f, ht};
+        utils::math::Vec3f c3 = model * utils::math::Vec3f{-hw, 0.01f, ht};
+
+        ImVec2 s0 = projectToScreen(c0);
+        ImVec2 s1 = projectToScreen(c1);
+        ImVec2 s2 = projectToScreen(c2);
+        ImVec2 s3 = projectToScreen(c3);
+
+        ImU32 outlineColor = IM_COL32(230, 235, 245, 230);
+        ImU32 fillColor = IM_COL32(80, 100, 130, 70);
+
+        if (obj.primitiveType == PrimitiveType::ArchDoor)
+        {
+            outlineColor = IM_COL32(255, 110, 90, 240);
+            fillColor = IM_COL32(180, 60, 50, 60);
+        }
+        else if (obj.primitiveType == PrimitiveType::ArchWindow)
+        {
+            outlineColor = IM_COL32(80, 200, 245, 240);
+            fillColor = IM_COL32(50, 130, 180, 60);
+        }
+        else if (obj.primitiveType == PrimitiveType::ArchStair)
+        {
+            outlineColor = IM_COL32(240, 210, 80, 240);
+            fillColor = IM_COL32(160, 140, 40, 60);
+        }
+        else if (obj.primitiveType == PrimitiveType::ArchRoof)
+        {
+            outlineColor = IM_COL32(235, 120, 60, 240);
+            fillColor = IM_COL32(170, 80, 40, 60);
+        }
+
+        // Draw quad outline & subtle fill
+        drawList->AddQuadFilled(s0, s1, s2, s3, fillColor);
+        drawList->AddQuad(s0, s1, s2, s3, outlineColor, 2.0f);
+
+        // Centerline
+        utils::math::Vec3f mLeft = model * utils::math::Vec3f{-hw, 0.01f, 0.0f};
+        utils::math::Vec3f mRight = model * utils::math::Vec3f{hw, 0.01f, 0.0f};
+        ImVec2 smL = projectToScreen(mLeft);
+        ImVec2 smR = projectToScreen(mRight);
+        drawList->AddLine(smL, smR, IM_COL32(120, 190, 255, 180), 1.5f);
+
+        // Dimension callout at center
+        if (len >= 0.40f)
+        {
+            ImVec2 smMid = ImVec2((smL.x + smR.x) * 0.5f, (smL.y + smR.y) * 0.5f);
+            char dimStr[32];
+            snprintf(dimStr, sizeof(dimStr), "%.2f m", len);
+
+            drawList->AddRectFilled(ImVec2(smMid.x - 26, smMid.y - 11),
+                                    ImVec2(smMid.x + 26, smMid.y + 11), IM_COL32(15, 20, 30, 220),
+                                    4.0f);
+            drawList->AddText(ImVec2(smMid.x - 21, smMid.y - 8), IM_COL32(90, 240, 140, 255),
+                              dimStr);
+        }
+
+        // Door Swing Arc for ArchDoor
+        if (obj.primitiveType == PrimitiveType::ArchDoor)
+        {
+            float dw = obj.params.doorWidth > 0.1f ? obj.params.doorWidth : 0.90f;
+            std::vector<ImVec2> arcScreenPts;
+            for (int a = 0; a <= 16; ++a)
+            {
+                float rad = (static_cast<float>(a) / 16.0f) * 1.570796f;  // 0 to 90 deg
+                utils::math::Vec3f ptLocal = {-dw * 0.5f + dw * std::sin(rad), 0.01f,
+                                              dw * std::cos(rad)};
+                arcScreenPts.push_back(projectToScreen(model * ptLocal));
+            }
+            drawList->AddPolyline(arcScreenPts.data(), static_cast<int>(arcScreenPts.size()),
+                                  IM_COL32(255, 80, 80, 255), false, 2.0f);
+        }
+
+        // Layer Badge
+        const char* layerBadge = "A-WALL";
+        if (obj.primitiveType == PrimitiveType::ArchDoor)
+            layerBadge = "A-DOOR";
+        else if (obj.primitiveType == PrimitiveType::ArchWindow)
+            layerBadge = "A-WIND";
+        else if (obj.primitiveType == PrimitiveType::ArchStair)
+            layerBadge = "A-STAIR";
+        else if (obj.primitiveType == PrimitiveType::ArchRoof)
+            layerBadge = "A-ROOF";
+
+        drawList->AddRectFilled(ImVec2(s0.x - 2, s0.y - 18), ImVec2(s0.x + 50, s0.y - 2),
+                                IM_COL32(20, 30, 45, 200), 3.0f);
+        drawList->AddText(ImVec2(s0.x + 2, s0.y - 17), IM_COL32(200, 220, 250, 240), layerBadge);
+    }
+}
+
 bool CADApp::drawNumericControl(const char* label, float* value, float step, float minVal,
                                 float maxVal, const char* format, std::function<void()> onChanged)
 {
@@ -2635,20 +3288,20 @@ void CADApp::renderHelpWindow()
     ImGui::SameLine();
     ImGui::TextDisabled("| Category Tabs:");
 
-    const char* tabNames[] = {"1. Viewport",     "2. UI & Numpad",   "3. Assembly",
-                              "4. CSG Booleans", "5. 2D Sketch",     "6. Materials",
-                              "7. 3D Caliper",   "8. Files / Export"};
+    const char* tabNames[] = {"1. Viewport",     "2. UI & Numpad",    "3. Assembly",
+                              "4. CSG Booleans", "5. 2D Sketch",      "6. Materials",
+                              "7. 3D Caliper",   "8. Files / Export", "9. Arch BIM & STEP"};
 
     if (!m_helpExpandAll)
     {
         float contentW = ImGui::GetContentRegionAvail().x;
         float spacingX = ImGui::GetStyle().ItemSpacing.x;
-        float btnW4 = (contentW - spacingX * 3.0f) * 0.25f;
-        if (btnW4 < 90.0f)
-            btnW4 = 90.0f;
-        for (int i = 0; i < 8; ++i)
+        float btnW3 = (contentW - spacingX * 2.0f) * (1.0f / 3.0f);
+        if (btnW3 < 90.0f)
+            btnW3 = 90.0f;
+        for (int i = 0; i < 9; ++i)
         {
-            if (i > 0 && i % 4 != 0)
+            if (i > 0 && i % 3 != 0)
             {
                 ImGui::SameLine();
             }
@@ -2663,7 +3316,7 @@ void CADApp::renderHelpWindow()
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.22f, 0.28f, 0.9f));
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.80f, 0.85f, 0.90f, 1.0f));
             }
-            if (ImGui::Button(tabNames[i], ImVec2(btnW4, 34.0f)))
+            if (ImGui::Button(tabNames[i], ImVec2(btnW3, 34.0f)))
             {
                 m_helpTab = i;
             }
@@ -2930,6 +3583,69 @@ void CADApp::renderHelpWindow()
                    "transforms, and PBR painting.");
     };
 
+    auto renderSection8 = [&]()
+    {
+        ImGui::TextColored(
+            ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+            "9. Architectural BIM Studio, ISO STEP AP214, DXF & .mcadx Super-Format");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        bulletItem(
+            "On-Screen Touch QWERTY File Naming",
+            "Tap [ Edit File Name ] in the Save / Export menu to open the full Touch QWERTY "
+            "keyboard modal. Features numbers, shift/caps toggle, backspace, clear, and name "
+            "sanitization. All exports (.mcad, .mcadx, .stl, .obj, .step, .dxf) automatically use "
+            "your custom name!");
+
+        bulletItem(
+            "Native ISO 10303-21 STEP AP214 Exporter",
+            "Export true solid topological B-Reps (MANIFOLD_SOLID_BREP) directly from your Android "
+            "device. Features standards-compliant AUTOMOTIVE_DESIGN AP214 schema, SI millimeter "
+            "units, CLOSED_SHELL of ADVANCED_FACE entities with exact AXIS2_PLACEMENT_3D plane "
+            "normals, and embedded PBR COLOUR_RGB styles. Compatible with FreeCAD, SolidWorks, "
+            "Autodesk Fusion, Rhino, and CATIA.");
+
+        bulletItem(
+            "AutoCAD DXF Exporter (.dxf)",
+            "Generates dual-format DXF files containing full 3D mesh geometry (3DFACE entities) "
+            "AND projected 2D floorplan vectors (LINE walls, ARC door swings, and TEXT dimension "
+            "annotations) organized across industry-standard CAD layers (A-WALL, A-DOOR, A-WIND, "
+            "A-DIMS, 3D-MESH).");
+
+        bulletItem(
+            "Architectural BIM Element Generators",
+            "Quickly stamp parametric architectural components:\n"
+            "- ArchWall: Solid concrete/masonry wall segment (L, T, H).\n"
+            "- ArchWallWithDoor: Wall with framed doorway cutout, jambs, header, and "
+            "90-degree open door leaf.\n"
+            "- ArchWallWithWindow: Wall with centered window cutout, timber frame, sill, and "
+            "glazing pane.\n"
+            "- ArchStaircase: Watertight parametric flight of stairs with customizable step "
+            "count, rise, and run.\n"
+            "- ArchRoof: Pitched gabled roof prism with eave overhangs.");
+
+        bulletItem(
+            "2D Continuous Wall Chain Tool",
+            "Enable [x] Tap Ground to Draw Continuous Walls. Simply tap sequential points P0 -> P1 "
+            "-> P2 on the ground plane; MobileCAD automatically computes lengths and orientations "
+            "to spawn connected 3D wall segments in real time. Use [ Close Wall Loop ] to seal "
+            "your floorplan perimeter.");
+
+        bulletItem(
+            "2D Blueprint Plan View Overlay",
+            "Tap [ Toggle 2D Blueprint Plan View ] to snap the Arcball camera to a crisp Top-down "
+            "view. MobileCAD renders 2D blueprint overlays with automatic wall length dimension "
+            "tags (e.g. '4.00 m'), 90-degree door swing arcs, and CAD layer badges directly on the "
+            "viewport canvas.");
+
+        bulletItem("MobileCAD Extended Super-Format (.mcadx)",
+                   "Next-generation spatial CAD container (MCADX100) with 16-byte chunk alignment "
+                   "and CRC32 integrity check. Stores project metadata, author, grid scale, active "
+                   "camera position/orientation, CAD layer table, parametric BIM properties, and "
+                   "full Cook-Torrance PBR surface materials.");
+    };
+
     if (m_helpExpandAll)
     {
         renderSection0();
@@ -2947,6 +3663,8 @@ void CADApp::renderHelpWindow()
         renderSection6();
         ImGui::Separator();
         renderSection7();
+        ImGui::Separator();
+        renderSection8();
     }
     else
     {
@@ -2976,6 +3694,9 @@ void CADApp::renderHelpWindow()
         case 7:
             renderSection7();
             break;
+        case 8:
+            renderSection8();
+            break;
         default:
             renderSection0();
             break;
@@ -2999,6 +3720,7 @@ void CADApp::renderImGui()
 {
     renderCompassGizmo();
     renderCaliperOverlay();
+    renderArchBlueprintOverlay();
 
     if (m_showHelpWindow)
     {
@@ -3636,6 +4358,83 @@ void CADApp::renderImGui()
                                 changed = true;
                             }
                         }
+
+                        if (obj.primitiveType == PrimitiveType::ArchWall ||
+                            obj.primitiveType == PrimitiveType::ArchDoor ||
+                            obj.primitiveType == PrimitiveType::ArchWindow)
+                        {
+                            changed |=
+                                drawNumericControl("Wall Length", &obj.params.wallLength, 0.10f,
+                                                   0.5f, 50.0f, "%.2f m", onGeomChanged);
+                            changed |=
+                                drawNumericControl("Wall Thickness", &obj.params.wallThickness,
+                                                   0.025f, 0.05f, 2.0f, "%.3f m", onGeomChanged);
+                            changed |=
+                                drawNumericControl("Wall Height", &obj.params.wallHeight, 0.10f,
+                                                   1.0f, 20.0f, "%.2f m", onGeomChanged);
+                        }
+                        if (obj.primitiveType == PrimitiveType::ArchDoor)
+                        {
+                            changed |=
+                                drawNumericControl("Door Width", &obj.params.doorWidth, 0.05f, 0.6f,
+                                                   3.0f, "%.2f m", onGeomChanged);
+                            changed |=
+                                drawNumericControl("Door Height", &obj.params.doorHeight, 0.05f,
+                                                   1.5f, 4.0f, "%.2f m", onGeomChanged);
+                            changed |=
+                                drawNumericControl("Door Swing Angle", &obj.params.doorSwingAngle,
+                                                   5.0f, 0.0f, 180.0f, "%.0f deg", onGeomChanged);
+                        }
+                        if (obj.primitiveType == PrimitiveType::ArchWindow)
+                        {
+                            changed |=
+                                drawNumericControl("Window Width", &obj.params.windowWidth, 0.05f,
+                                                   0.4f, 4.0f, "%.2f m", onGeomChanged);
+                            changed |=
+                                drawNumericControl("Window Height", &obj.params.windowHeight, 0.05f,
+                                                   0.4f, 3.0f, "%.2f m", onGeomChanged);
+                            changed |=
+                                drawNumericControl("Sill Height", &obj.params.windowSillHeight,
+                                                   0.05f, 0.2f, 2.0f, "%.2f m", onGeomChanged);
+                        }
+                        if (obj.primitiveType == PrimitiveType::ArchStair)
+                        {
+                            float steps = static_cast<float>(obj.params.stairSteps);
+                            if (drawNumericControl("Step Count", &steps, 1.0f, 2.0f, 40.0f, "%.0f",
+                                                   [&obj, &steps, onGeomChanged]()
+                                                   {
+                                                       obj.params.stairSteps =
+                                                           static_cast<int>(steps);
+                                                       onGeomChanged();
+                                                   }))
+                            {
+                                obj.params.stairSteps = static_cast<int>(steps);
+                                changed = true;
+                            }
+                            changed |=
+                                drawNumericControl("Total Rise", &obj.params.stairRise, 0.10f, 0.5f,
+                                                   10.0f, "%.2f m", onGeomChanged);
+                            changed |= drawNumericControl("Total Run", &obj.params.stairRun, 0.10f,
+                                                          0.5f, 15.0f, "%.2f m", onGeomChanged);
+                            changed |=
+                                drawNumericControl("Stair Width", &obj.params.stairWidth, 0.05f,
+                                                   0.6f, 5.0f, "%.2f m", onGeomChanged);
+                        }
+                        if (obj.primitiveType == PrimitiveType::ArchRoof)
+                        {
+                            changed |=
+                                drawNumericControl("Roof Width", &obj.params.roofWidth, 0.10f, 1.0f,
+                                                   30.0f, "%.2f m", onGeomChanged);
+                            changed |=
+                                drawNumericControl("Roof Length", &obj.params.roofLength, 0.10f,
+                                                   1.0f, 50.0f, "%.2f m", onGeomChanged);
+                            changed |=
+                                drawNumericControl("Ridge Height", &obj.params.roofRidgeHeight,
+                                                   0.05f, 0.2f, 10.0f, "%.2f m", onGeomChanged);
+                            changed |=
+                                drawNumericControl("Overhang", &obj.params.roofOverhang, 0.05f,
+                                                   0.0f, 2.0f, "%.2f m", onGeomChanged);
+                        }
                     }
 
                     if (changed)
@@ -3857,9 +4656,183 @@ void CADApp::renderImGui()
                 }
             }
 
-            // 5. Project Save / Load & Export Section
+            // 5. Architectural BIM & Floorplan Studio Section
+            if (ImGui::CollapsingHeader("Architectural BIM & Floorplan Studio"))
+            {
+                ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Parametric BIM Elements:");
+
+                float bimBtnW =
+                    (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+
+                if (ImGui::Button("+ Wall (4m x 3m)", ImVec2(bimBtnW, 36.0f)))
+                {
+                    pushUndoState();
+                    for (auto& o : m_objects)
+                        o.isSelected = false;
+                    SceneObject obj;
+                    obj.name = "Wall_" + std::to_string(m_objects.size() + 1);
+                    obj.primitiveType = PrimitiveType::ArchWall;
+                    obj.params.wallLength = 4.0f;
+                    obj.params.wallThickness = 0.225f;
+                    obj.params.wallHeight = 3.0f;
+                    obj.params.bimLayer = "A-WALL";
+                    obj.materialColor = {0.84f, 0.83f, 0.80f};
+                    obj.metallic = 0.10f;
+                    obj.roughness = 0.80f;
+                    obj.isSelected = true;
+                    m_objects.push_back(std::move(obj));
+                    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+                    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("+ Door Wall (0.9x2.1m)", ImVec2(bimBtnW, 36.0f)))
+                {
+                    pushUndoState();
+                    for (auto& o : m_objects)
+                        o.isSelected = false;
+                    SceneObject obj;
+                    obj.name = "DoorWall_" + std::to_string(m_objects.size() + 1);
+                    obj.primitiveType = PrimitiveType::ArchDoor;
+                    obj.params.wallLength = 4.0f;
+                    obj.params.wallThickness = 0.225f;
+                    obj.params.wallHeight = 3.0f;
+                    obj.params.doorWidth = 0.90f;
+                    obj.params.doorHeight = 2.10f;
+                    obj.params.doorSwingAngle = 90.0f;
+                    obj.params.bimLayer = "A-DOOR";
+                    obj.materialColor = {0.84f, 0.83f, 0.80f};
+                    obj.metallic = 0.10f;
+                    obj.roughness = 0.80f;
+                    obj.isSelected = true;
+                    m_objects.push_back(std::move(obj));
+                    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+                    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                }
+
+                if (ImGui::Button("+ Window Wall (1.2x1.2m)", ImVec2(bimBtnW, 36.0f)))
+                {
+                    pushUndoState();
+                    for (auto& o : m_objects)
+                        o.isSelected = false;
+                    SceneObject obj;
+                    obj.name = "WindowWall_" + std::to_string(m_objects.size() + 1);
+                    obj.primitiveType = PrimitiveType::ArchWindow;
+                    obj.params.wallLength = 4.0f;
+                    obj.params.wallThickness = 0.225f;
+                    obj.params.wallHeight = 3.0f;
+                    obj.params.windowWidth = 1.20f;
+                    obj.params.windowHeight = 1.20f;
+                    obj.params.windowSillHeight = 0.90f;
+                    obj.params.bimLayer = "A-WIND";
+                    obj.materialColor = {0.84f, 0.83f, 0.80f};
+                    obj.metallic = 0.10f;
+                    obj.roughness = 0.80f;
+                    obj.isSelected = true;
+                    m_objects.push_back(std::move(obj));
+                    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+                    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("+ Staircase (10 Steps)", ImVec2(bimBtnW, 36.0f)))
+                {
+                    pushUndoState();
+                    for (auto& o : m_objects)
+                        o.isSelected = false;
+                    SceneObject obj;
+                    obj.name = "Stairs_" + std::to_string(m_objects.size() + 1);
+                    obj.primitiveType = PrimitiveType::ArchStair;
+                    obj.params.stairSteps = 10;
+                    obj.params.stairRise = 2.5f;
+                    obj.params.stairRun = 2.8f;
+                    obj.params.stairWidth = 1.2f;
+                    obj.params.bimLayer = "A-STAIR";
+                    obj.materialColor = {0.75f, 0.76f, 0.78f};
+                    obj.metallic = 0.15f;
+                    obj.roughness = 0.70f;
+                    obj.isSelected = true;
+                    m_objects.push_back(std::move(obj));
+                    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+                    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                }
+
+                if (ImGui::Button("+ Gabled Roof (4.5x6m)", ImVec2(-1.0f, 36.0f)))
+                {
+                    pushUndoState();
+                    for (auto& o : m_objects)
+                        o.isSelected = false;
+                    SceneObject obj;
+                    obj.name = "Roof_" + std::to_string(m_objects.size() + 1);
+                    obj.primitiveType = PrimitiveType::ArchRoof;
+                    obj.params.roofWidth = 4.5f;
+                    obj.params.roofLength = 6.0f;
+                    obj.params.roofRidgeHeight = 1.8f;
+                    obj.params.roofOverhang = 0.3f;
+                    obj.params.bimLayer = "A-ROOF";
+                    obj.materialColor = {0.78f, 0.35f, 0.22f};
+                    obj.metallic = 0.05f;
+                    obj.roughness = 0.85f;
+                    obj.isSelected = true;
+                    m_objects.push_back(std::move(obj));
+                    m_selectedIndex = static_cast<int>(m_objects.size() - 1);
+                    rebuildObjectGeometry(static_cast<size_t>(m_selectedIndex));
+                }
+
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                                   "2D Continuous Wall Chain Tool:");
+                ImGui::Checkbox("Tap Ground to Draw Continuous Walls", &m_archWallDrawMode);
+                if (m_archWallDrawMode)
+                {
+                    drawNumericControl("Wall Thickness", &m_archWallThickness, 0.025f, 0.10f, 1.0f,
+                                       "%.3f m");
+                    drawNumericControl("Wall Height", &m_archWallHeight, 0.10f, 1.0f, 10.0f,
+                                       "%.2f m");
+                    ImGui::Text("Points in Chain: %zu", m_wallChainPoints.size());
+                    if (ImGui::Button("Clear Wall Chain", ImVec2(bimBtnW, 32.0f)))
+                    {
+                        clearWallChain();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Close Wall Loop", ImVec2(bimBtnW, 32.0f)))
+                    {
+                        closeWallLoop();
+                    }
+                }
+
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                                   "Architectural Blueprint Plan View:");
+                if (ImGui::Button(m_archBlueprintMode ? "Exit 2D Blueprint Plan View"
+                                                      : "Toggle 2D Blueprint Plan View",
+                                  ImVec2(-1.0f, 38.0f)))
+                {
+                    m_archBlueprintMode = !m_archBlueprintMode;
+                    if (m_archBlueprintMode)
+                    {
+                        m_camera.setViewTop();
+                    }
+                }
+                if (m_archBlueprintMode)
+                {
+                    ImGui::TextColored(
+                        ImVec4(0.4f, 1.0f, 0.6f, 1.0f),
+                        "Blueprint Overlay Active (Top View / Vector Dimensions / Door Arcs)");
+                }
+            }
+
+            // 6. Project Save / Load & Export Section
             if (ImGui::CollapsingHeader("Project Save / Load & Export"))
             {
+                ImGui::Text("File Name: [ %s ]", m_customFileName);
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.45f, 0.75f, 1.0f));
+                if (ImGui::Button("Edit File Name"))
+                {
+                    openKeyboardPopup();
+                }
+                ImGui::PopStyleColor();
+                ImGui::Separator();
+
                 if (ImGui::Button("Save Workspace (.mcad)", ImVec2(-1.0f, 0.0f)))
                 {
                     saveWorkspace();
@@ -3868,12 +4841,21 @@ void CADApp::renderImGui()
                 {
                     loadWorkspace();
                 }
+                if (ImGui::Button("Save Extended CAD/BIM (.mcadx)", ImVec2(-1.0f, 0.0f)))
+                {
+                    saveMCADX();
+                }
+                if (ImGui::Button("Load Extended (.mcadx)", ImVec2(-1.0f, 0.0f)))
+                {
+                    loadMCADX();
+                }
                 if (!m_projectStatus.empty())
                 {
                     ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.8f, 1.0f), "%s",
                                        m_projectStatus.c_str());
                 }
-                ImGui::TextDisabled("Workspace: /sdcard/Download/mobilecad_workspace.mcad");
+                ImGui::TextDisabled("Workspace: /sdcard/Download/%s.{mcad,mcadx}",
+                                    m_customFileName);
 
                 ImGui::Separator();
                 if (ImGui::Button("Export Binary STL (.stl)", ImVec2(-1.0f, 0.0f)))
@@ -3884,26 +4866,28 @@ void CADApp::renderImGui()
                 {
                     exportOBJ();
                 }
+                if (ImGui::Button("Export ISO STEP (.step)", ImVec2(-1.0f, 0.0f)))
+                {
+                    exportSTEP();
+                }
+                if (ImGui::Button("Export AutoCAD DXF (.dxf)", ImVec2(-1.0f, 0.0f)))
+                {
+                    exportDXF();
+                }
                 if (!m_exportStatus.empty())
                 {
                     ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s",
                                        m_exportStatus.c_str());
                 }
-                ImGui::TextDisabled("Exports: /sdcard/Download/mobilecad_part.{stl,obj}");
+                ImGui::TextDisabled("Exports: /sdcard/Download/%s.{stl,obj,step,dxf}",
+                                    m_customFileName);
 
                 ImGui::Separator();
-                ImGui::Text("Import 3D Mesh (.stl / .obj):");
-                if (ImGui::Button("Scan /sdcard/Download/ for Meshes", ImVec2(-1.0f, 0.0f)))
+                ImGui::Text("File Scanner & Project Loader:");
+                if (ImGui::Button("Scan /sdcard/Download/ for Projects & Meshes",
+                                  ImVec2(-1.0f, 0.0f)))
                 {
                     refreshDiscoveredFiles();
-                }
-                if (ImGui::Button("Import mobilecad_part.stl", ImVec2(-1.0f, 0.0f)))
-                {
-                    importMeshFile("/sdcard/Download/mobilecad_part.stl");
-                }
-                if (ImGui::Button("Import mobilecad_part.obj", ImVec2(-1.0f, 0.0f)))
-                {
-                    importMeshFile("/sdcard/Download/mobilecad_part.obj");
                 }
 
                 if (!m_discoveredMeshFiles.empty())
@@ -3927,12 +4911,27 @@ void CADApp::renderImGui()
 
                     ImGui::Combo("Files", &m_selectedMeshFileIdx, fileItems.data(),
                                  static_cast<int>(fileItems.size()));
-                    if (ImGui::Button("Import Selected File", ImVec2(-1.0f, 0.0f)))
+                    if (ImGui::Button("Load Selected Project / Mesh", ImVec2(-1.0f, 0.0f)))
                     {
                         if (m_selectedMeshFileIdx >= 0 &&
                             m_selectedMeshFileIdx < static_cast<int>(m_discoveredMeshFiles.size()))
                         {
-                            importMeshFile(m_discoveredMeshFiles[m_selectedMeshFileIdx]);
+                            const std::string& selPath =
+                                m_discoveredMeshFiles[m_selectedMeshFileIdx];
+                            std::string ext = std::filesystem::path(selPath).extension().string();
+                            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                            if (ext == ".mcad")
+                            {
+                                loadWorkspaceFile(selPath);
+                            }
+                            else if (ext == ".mcadx")
+                            {
+                                loadMCADXFile(selPath);
+                            }
+                            else
+                            {
+                                importMeshFile(selPath);
+                            }
                         }
                     }
                 }
@@ -3990,6 +4989,7 @@ void CADApp::renderImGui()
     }
 
     renderNumpadPopup();
+    renderKeyboardPopup();
 }
 
 void CADApp::cleanupSwapchain()
@@ -4288,6 +5288,25 @@ void CADApp::onTouchEvent(int32_t action, int32_t pointerCount, float x0, float 
                                 "3D Caliper: Placed Point B at (%.3f, %.3f, %.3f), Distance L = "
                                 "%.3f",
                                 m_measurePtB.x, m_measurePtB.y, m_measurePtB.z, dist);
+                        }
+                    }
+                }
+                else if (m_archWallDrawMode)
+                {
+                    // Intersect with ground plane Y = 0 to place wall chain points
+                    if (std::abs(ray.dir.y) > 1e-4f)
+                    {
+                        float t = -ray.origin.y / ray.dir.y;
+                        if (t > 0.0f)
+                        {
+                            float hitX = ray.origin.x + t * ray.dir.x;
+                            float hitZ = ray.origin.z + t * ray.dir.z;
+                            if (m_snapToGrid)
+                            {
+                                hitX = std::round(hitX / 0.25f) * 0.25f;
+                                hitZ = std::round(hitZ / 0.25f) * 0.25f;
+                            }
+                            addWallChainPoint({hitX, 0.0f, hitZ});
                         }
                     }
                 }

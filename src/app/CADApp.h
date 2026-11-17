@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "geometry/Primitives.h"
+#include "io/ArchFormat.h"
 #include "io/MeshExporter.h"
+#include "io/StepExporter.h"
 #include "rendering/Camera.h"
 #include "rendering/MeshBuffer.h"
 #include "rendering/Pipeline.h"
@@ -28,7 +30,12 @@ enum class PrimitiveType
     Cylinder,
     Sphere,
     Extrude,
-    Revolve
+    Revolve,
+    ArchWall,
+    ArchDoor,
+    ArchWindow,
+    ArchStair,
+    ArchRoof
 };
 
 enum class SketchTool : int
@@ -59,6 +66,26 @@ struct PrimitiveParams
     float revolveAngle{360.0f};
     int revolveSegments{36};
     float revolveOffset{0.35f};
+
+    // Architectural BIM parameters
+    float wallLength{4.0f};
+    float wallThickness{0.225f};
+    float wallHeight{3.0f};
+    float doorWidth{0.90f};
+    float doorHeight{2.10f};
+    float doorSwingAngle{90.0f};
+    float windowWidth{1.20f};
+    float windowHeight{1.20f};
+    float windowSillHeight{0.90f};
+    int stairSteps{10};
+    float stairRise{2.5f};
+    float stairRun{2.8f};
+    float stairWidth{1.2f};
+    float roofWidth{4.5f};
+    float roofLength{6.0f};
+    float roofRidgeHeight{1.8f};
+    float roofOverhang{0.3f};
+    std::string bimLayer{"A-WALL"};
 };
 
 struct SurfaceMaterial
@@ -310,8 +337,14 @@ class CADApp
     void rebuildObjectGeometry(size_t index);
     bool exportSTL();
     bool exportOBJ();
+    bool exportSTEP();
+    bool exportDXF();
     bool saveWorkspace();
     bool loadWorkspace();
+    bool saveMCADX();
+    bool loadMCADX();
+    bool loadWorkspaceFile(const std::string& filepath);
+    bool loadMCADXFile(const std::string& filepath);
     bool importMeshFile(const std::string& filepath);
     void refreshDiscoveredFiles();
     void setExportPath(const std::string& path) { m_exportPath = path; }
@@ -319,6 +352,20 @@ class CADApp
     const std::string& getExportStatus() const { return m_exportStatus; }
     const std::string& getProjectStatus() const { return m_projectStatus; }
     const std::string& getImportStatus() const { return m_importStatus; }
+
+    // Custom File Naming & Touch QWERTY Keyboard
+    void setCustomFileName(const char* name);
+    const char* getCustomFileName() const { return m_customFileName; }
+    void openKeyboardPopup();
+
+    // Architectural BIM & Blueprint controls
+    bool isArchWallDrawMode() const { return m_archWallDrawMode; }
+    void setArchWallDrawMode(bool enabled) { m_archWallDrawMode = enabled; }
+    void addWallChainPoint(const utils::math::Vec3f& pt);
+    void clearWallChain() { m_wallChainPoints.clear(); }
+    void closeWallLoop();
+    bool isArchBlueprintMode() const { return m_archBlueprintMode; }
+    void setArchBlueprintMode(bool enabled) { m_archBlueprintMode = enabled; }
 
     // 2D Sketch & Extrude / Revolve controls
     void rebuildSketchMesh();
@@ -540,6 +587,22 @@ class CADApp
     };
     NumpadState m_numpad;
     bool m_numpadNeedOpen{false};
+
+    // Custom File Naming & On-Screen Touch QWERTY Keyboard state
+    char m_customFileName[128]{"my_cad_project"};
+    bool m_showKeyboardPopup{false};
+    bool m_keyboardShift{false};
+    std::string m_keyboardBuffer;
+    bool m_keyboardNeedOpen{false};
+    void renderKeyboardPopup();
+
+    // Architectural BIM continuous wall chain & 2D blueprint overlay
+    bool m_archWallDrawMode{false};
+    float m_archWallThickness{0.225f};
+    float m_archWallHeight{3.0f};
+    std::vector<utils::math::Vec3f> m_wallChainPoints;
+    bool m_archBlueprintMode{false};
+    void renderArchBlueprintOverlay();
 };
 
 }  // namespace app

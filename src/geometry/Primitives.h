@@ -1603,6 +1603,168 @@ class Primitives
 
         return lines;
     }
+
+    // 12. Architectural BIM: Wall Segment
+    static MeshData createArchWall(float length = 4.0f, float thickness = 0.225f,
+                                   float height = 3.0f, manifold::Manifold* outManifold = nullptr)
+    {
+        const float masonryColor[3] = {0.84f, 0.83f, 0.80f};
+        auto wall = manifold::Manifold::Cube({length, height, thickness}, true)
+                        .Translate({0.0, height * 0.5, 0.0});
+        if (outManifold != nullptr)
+        {
+            *outManifold = wall;
+        }
+        return fromManifold(wall, masonryColor);
+    }
+
+    // 13. Architectural BIM: Wall with Framed Door & Swing
+    static MeshData createArchWallWithDoor(float length = 4.0f, float thickness = 0.225f,
+                                           float height = 3.0f, float doorWidth = 0.90f,
+                                           float doorHeight = 2.10f, float doorSwingAngle = 90.0f,
+                                           manifold::Manifold* outManifold = nullptr)
+    {
+        const float masonryColor[3] = {0.84f, 0.83f, 0.80f};
+        auto wall = manifold::Manifold::Cube({length, height, thickness}, true)
+                        .Translate({0.0, height * 0.5, 0.0});
+
+        // Cutout for door
+        auto cutout = manifold::Manifold::Cube({doorWidth, doorHeight, thickness * 2.5f}, true)
+                          .Translate({0.0, doorHeight * 0.5, 0.0});
+        auto cutWall = wall - cutout;
+
+        // Timber / aluminum door frame
+        float frameThick = 0.05f;
+        float frameDepth = thickness + 0.02f;
+        auto leftPost =
+            manifold::Manifold::Cube({frameThick, doorHeight, frameDepth}, true)
+                .Translate({-doorWidth * 0.5f + frameThick * 0.5f, doorHeight * 0.5f, 0.0f});
+        auto rightPost =
+            manifold::Manifold::Cube({frameThick, doorHeight, frameDepth}, true)
+                .Translate({doorWidth * 0.5f - frameThick * 0.5f, doorHeight * 0.5f, 0.0f});
+        auto header = manifold::Manifold::Cube({doorWidth, frameThick, frameDepth}, true)
+                          .Translate({0.0f, doorHeight - frameThick * 0.5f, 0.0f});
+        auto frame = leftPost + rightPost + header;
+
+        // Door leaf (pivoted by doorSwingAngle around left hinge)
+        float leafW = doorWidth - frameThick * 2.0f;
+        float leafH = doorHeight - frameThick;
+        float leafT = 0.04f;
+        auto leaf = manifold::Manifold::Cube({leafW, leafH, leafT}, true)
+                        .Translate({leafW * 0.5f, leafH * 0.5f, 0.0f});
+        leaf = leaf.Rotate(0.0, doorSwingAngle, 0.0)
+                   .Translate({-doorWidth * 0.5f + frameThick, 0.0f, 0.0f});
+
+        auto result = cutWall + frame + leaf;
+        if (outManifold != nullptr)
+        {
+            *outManifold = result;
+        }
+        return fromManifold(result, masonryColor);
+    }
+
+    // 14. Architectural BIM: Wall with Glazed Window & Sill
+    static MeshData createArchWallWithWindow(float length = 4.0f, float thickness = 0.225f,
+                                             float height = 3.0f, float windowWidth = 1.20f,
+                                             float windowHeight = 1.20f, float sillHeight = 0.90f,
+                                             manifold::Manifold* outManifold = nullptr)
+    {
+        const float masonryColor[3] = {0.84f, 0.83f, 0.80f};
+        auto wall = manifold::Manifold::Cube({length, height, thickness}, true)
+                        .Translate({0.0, height * 0.5, 0.0});
+
+        float centerY = sillHeight + windowHeight * 0.5f;
+        auto cutout = manifold::Manifold::Cube({windowWidth, windowHeight, thickness * 2.5f}, true)
+                          .Translate({0.0, centerY, 0.0});
+        auto cutWall = wall - cutout;
+
+        // Window Sill
+        float sillThick = 0.06f;
+        float sillDepth = thickness + 0.08f;
+        auto sill = manifold::Manifold::Cube({windowWidth + 0.16f, sillThick, sillDepth}, true)
+                        .Translate({0.0f, sillHeight - sillThick * 0.5f, 0.0f});
+
+        // Window Frame
+        float frameThick = 0.04f;
+        auto leftF = manifold::Manifold::Cube({frameThick, windowHeight, thickness}, true)
+                         .Translate({-windowWidth * 0.5f + frameThick * 0.5f, centerY, 0.0f});
+        auto rightF = manifold::Manifold::Cube({frameThick, windowHeight, thickness}, true)
+                          .Translate({windowWidth * 0.5f - frameThick * 0.5f, centerY, 0.0f});
+        auto topF = manifold::Manifold::Cube({windowWidth, frameThick, thickness}, true)
+                        .Translate({0.0f, sillHeight + windowHeight - frameThick * 0.5f, 0.0f});
+
+        // Glazing Pane
+        auto glass =
+            manifold::Manifold::Cube(
+                {windowWidth - frameThick * 2.0f, windowHeight - frameThick * 2.0f, 0.02f}, true)
+                .Translate({0.0f, centerY, 0.0f});
+
+        auto result = cutWall + sill + leftF + rightF + topF + glass;
+        if (outManifold != nullptr)
+        {
+            *outManifold = result;
+        }
+        return fromManifold(result, masonryColor);
+    }
+
+    // 15. Architectural BIM: Parametric Watertight Staircase
+    static MeshData createArchStaircase(int stepCount = 10, float totalRise = 2.5f,
+                                        float totalRun = 2.8f, float width = 1.2f,
+                                        manifold::Manifold* outManifold = nullptr)
+    {
+        if (stepCount < 1)
+            stepCount = 1;
+
+        float stepRise = totalRise / static_cast<float>(stepCount);
+        float stepRun = totalRun / static_cast<float>(stepCount);
+
+        manifold::Manifold result;
+        for (int i = 0; i < stepCount; ++i)
+        {
+            float currentH = (i + 1) * stepRise;
+            float z0 = i * stepRun - totalRun * 0.5f;
+            float runLength = totalRun * 0.5f - z0;
+            auto stepBox = manifold::Manifold::Cube({width, currentH, runLength}, true)
+                               .Translate({0.0f, currentH * 0.5f, z0 + runLength * 0.5f});
+            if (i == 0)
+            {
+                result = stepBox;
+            }
+            else
+            {
+                result = result + stepBox;
+            }
+        }
+
+        if (outManifold != nullptr)
+        {
+            *outManifold = result;
+        }
+        const float stoneColor[3] = {0.75f, 0.76f, 0.78f};
+        return fromManifold(result, stoneColor);
+    }
+
+    // 16. Architectural BIM: Gabled / Pitched Roof Prism
+    static MeshData createArchRoof(float width = 4.5f, float length = 6.0f,
+                                   float ridgeHeight = 1.8f, float overhang = 0.3f,
+                                   manifold::Manifold* outManifold = nullptr)
+    {
+        float totalW = width + 2.0f * overhang;
+        float totalL = length + 2.0f * overhang;
+
+        manifold::SimplePolygon poly = {
+            {-totalW * 0.5f, 0.0f}, {totalW * 0.5f, 0.0f}, {0.0f, ridgeHeight}};
+        manifold::Polygons polys = {poly};
+        auto roof =
+            manifold::Manifold::Extrude(polys, totalL).Translate({0.0f, 0.0f, -totalL * 0.5f});
+
+        if (outManifold != nullptr)
+        {
+            *outManifold = roof;
+        }
+        const float terracottaColor[3] = {0.78f, 0.35f, 0.22f};
+        return fromManifold(roof, terracottaColor);
+    }
 };
 
 }  // namespace geometry
